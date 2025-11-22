@@ -1,0 +1,47 @@
+{
+  "EDM: House & Techno": [
+    "Deep House", "Tech House", "Acid House", "Minimal", "Progressive House", "Melodic Techno", "Hard Techno", "Detroit Techno", "Lo-Fi House", "Bass House"
+  ],
+  "EDM: Trance & Synth": [
+    "Synthwave", "Vocal Trance", "Psytrance", "Uplifting Trance", "Cyberpunk", "Darksynth", "Eurodance", "Hard Trance", "Goa Trance", "Dream Trance"
+  ],
+  "EDM: Bass & Breakbeat": [
+    "Drum & Bass", "Dubstep", "Jungle", "Trap", "Garage", "Liquid DnB", "Neurofunk", "Breakbeat", "Glitch Hop", "Hardstyle"
+  ],
+  "Rock: Classic & Hard": [
+    "Classic Rock", "Hard Rock", "Blues Rock", "Psych Rock", "Glam Rock", "Southern Rock", "Prog Rock", "Arena Rock", "Rock & Roll", "Soft Rock"
+  ],
+  "Rock: Metal & Heavy": [
+    "Heavy Metal", "Thrash Metal", "Death Metal", "Doom Metal", "Black Metal", "Industrial Metal", "Metalcore", "Nu Metal", "Power Metal", "Symphonic Metal"
+  ],
+  "Rock: Indie & Alt": [
+    "Indie Rock", "Alt Rock", "Shoegaze", "Grunge", "Post-Punk", "Britpop", "Dream Pop", "Emo", "Pop Punk", "Math Rock"
+  ],
+  "Hip Hop & Rap": [
+    "Old School", "Trap", "Boom Bap", "Drill", "Gangsta Rap", "Conscious Hip Hop", "Lo-Fi Hip Hop", "Experimental Hip Hop", "Cloud Rap", "Grime"
+  ],
+  "Pop & R&B": [
+    "Contemporary R&B", "Soul", "Disco", "Funk", "Synthpop", "K-Pop", "J-Pop", "Indie Pop", "Electropop", "Neo-Soul"
+  ],
+  "Latin & Reggae": [
+    "Reggaeton", "Dancehall", "Salsa", "Bachata", "Roots Reggae", "Dub", "Ska", "Latin Trap", "Bossa Nova", "Cumbia"
+  ],
+  "Country: Modern & Pop": [
+    "Country Pop", "Bro Country", "Country Rock", "Modern Country", "Texas Country", "Hick Hop", "Country Soul", "Red Dirt", "Nashville Sound", "Americana"
+  ],
+  "Country: Trad & Folk": [
+    "Bluegrass", "Outlaw Country", "Western Swing", "Folk", "Appalachian", "Honky Tonk", "Alt-Country", "Neo-Traditional", "Acoustic Folk", "Delta Blues"
+  ],
+  "Jazz & Blues": [
+    "Swing", "Bebop", "Cool Jazz", "Fusion", "Smooth Jazz", "Chicago Blues", "Delta Blues", "Soul Jazz", "Free Jazz", "Big Band"
+  ],
+  "Cinematic & Score": [
+    "Orchestral", "Epic/Trailer", "Fantasy", "Sci-Fi", "Horror", "Ambient", "Drone", "Neoclassical", "Game OST", "Choral"
+  ],
+  "World & International": [
+    "Celtic", "Afrobeat", "Bollywood", "Flamenco", "Middle Eastern", "Nordic Folk", "Chanson", "Tango", "Samba", "Highlife"
+  ],
+  "Experimental & AI": [
+    "Glitch", "Noise", "IDM", "Vaporwave", "Hyperpop", "Mashup", "Plunderphonics", "Sound Collage", "Generative", "Avant-Garde"
+  ]
+}
