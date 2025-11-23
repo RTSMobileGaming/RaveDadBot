@@ -14,50 +14,35 @@ const client = new Client({
     partials: [Partials.Message, Partials.Channel, Partials.Reaction]
 });
 
-// --- CONFIG: CHANNEL MAP ---
-// The "Router" - Mapping Macro Genres to Channel IDs
+// --- CONFIG: PASTE YOUR CHANNEL IDs HERE ---
+// Be sure these match your actual Discord Channel IDs
+const CHANNEL_LEADERBOARD = '1441545661316206685';
+const CHANNEL_MOD_QUEUE = '1441526604449710133';
+const CHANNEL_LEGACY = '1441526523659026626'; 
+
+// Router Map (Genre -> Channel ID)
 const CHANNEL_ROUTER = {
-    // Channel 1: Electronic 4-Floor
     'EDM: House & Techno': '1442168642388230164',
     'EDM: Trance & Synth': '1442168642388230164',
-    
-    // Channel 2: Bass, Urban, Pop
     'EDM: Bass & Breakbeat': '1442168686411645100',
     'Hip Hop & Rap': '1442168686411645100',
     'Pop & R&B': '1442168686411645100',
     'Latin & Reggae': '1442168686411645100',
-
-    // Channel 3: Rock, Metal, Roots
     'Rock: Classic & Hard': '1442168727717019819',
     'Rock: Metal & Heavy': '1442168727717019819',
     'Rock: Indie & Alt': '1442168727717019819',
     'Country: Modern & Pop': '1442168727717019819',
     'Country: Trad & Folk': '1442168727717019819',
     'Jazz & Blues': '1442168727717019819',
-
-    // Channel 4: Cinematic & Experimental
     'Cinematic & Score': '1442168819836649515',
     'World & International': '1442168819836649515',
     'Experimental & AI': '1442168819836649515'
 };
 
-const CHANNEL_LEADERBOARD = '1441545661316206685';
-const CHANNEL_MOD_QUEUE = '1441526604449710133';
-const CHANNEL_LEGACY = '1441526523659026626'; // Old Fresh Drops
-
 const DAILY_SUBMISSION_LIMIT = 3; 
-const DAILY_POINT_CAP = 40; // Increased from 20
+const DAILY_POINT_CAP = 40; 
 
-const ALLOWED_DOMAINS = [
-    'youtube.com', 'youtu.be', 'music.youtube.com', 
-    'spotify.com', 
-    'suno.com', 'suno.ai', 
-    'soundcloud.com', 
-    'udio.com', 
-    'sonauto.ai', 
-    'tunee.ai', 
-    'mureka.ai'
-];
+const ALLOWED_DOMAINS = ['youtube.com', 'youtu.be', 'music.youtube.com', 'spotify.com', 'suno.com', 'suno.ai', 'soundcloud.com', 'udio.com', 'sonauto.ai', 'tunee.ai', 'mureka.ai'];
 const BACKUP_INTERVAL = 24 * 60 * 60 * 1000; 
 
 // --- CACHE ---
@@ -71,17 +56,10 @@ setInterval(() => {
     try { fs.copyFileSync('./data/ravedad.db', './data/ravedad.backup.db'); } catch (e) { console.error('Backup failed:', e); }
 }, BACKUP_INTERVAL);
 
-// --- AUTO-MIGRATION (Safe Schema Update) ---
-try {
-    db.prepare('ALTER TABLE songs ADD COLUMN artist_name TEXT').run();
-    console.log('✅ Migrated DB: Added artist_name column.');
-} catch (e) { /* Column likely exists */ }
-
-try {
-    db.prepare('ALTER TABLE songs ADD COLUMN channel_id TEXT').run();
-    console.log('✅ Migrated DB: Added channel_id column.');
-} catch (e) { /* Column likely exists */ }
-
+// --- AUTO-MIGRATION ---
+try { db.prepare('ALTER TABLE songs ADD COLUMN artist_name TEXT').run(); } catch (e) {}
+try { db.prepare('ALTER TABLE songs ADD COLUMN channel_id TEXT').run(); } catch (e) {}
+try { db.prepare('ALTER TABLE votes ADD COLUMN amount INTEGER DEFAULT 1').run(); } catch (e) {} // Fix for Vote tracking
 
 // --- HELPERS ---
 function isValidLink(url) {
@@ -109,7 +87,7 @@ function getUser(userId) {
 function addPoints(userId) {
     const user = getUser(userId);
     if (user.daily_points >= DAILY_POINT_CAP) return { earned: false, reason: "daily_cap" }; 
-    if (user.credits >= 60) { // Soft Wallet Cap
+    if (user.credits >= 60) { 
         db.prepare('UPDATE users SET lifetime_points = lifetime_points + 2, daily_points = daily_points + 2 WHERE id = ?').run(userId);
         return { earned: false, reason: "wallet_cap" };
     }
@@ -126,10 +104,24 @@ function spendCredits(userId, amount) {
 
 function modifyUpvotes(songId, amount) { db.prepare('UPDATE songs SET upvotes = upvotes + ? WHERE id = ?').run(amount, songId); }
 function incrementViews(songId) { db.prepare('UPDATE songs SET views = views + 1 WHERE id = ?').run(songId); }
-// Update getSongStats to include channel_id and artist_name
 function getSongStats(songId) { return db.prepare('SELECT upvotes, views, message_id, channel_id, user_id, description, artist_name, tags, url FROM songs WHERE id = ?').get(songId); }
 function truncate(str, n){ return (str.length > n) ? str.slice(0, n-1) + '...' : str; }
 function getRankIcon(index) { return index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`; }
+
+// --- NEW: VOTE TRACKING ---
+function canUserVote(userId, songId, newPoints) {
+    // Only restrict positive votes (upvotes). Allow dislikes separately or treat them differently?
+    // For now, let's assume the limit applies to Upvotes (Positive Score)
+    if (newPoints < 0) return true; // Allow dislike
+
+    const record = db.prepare('SELECT SUM(amount) as total FROM votes WHERE voter_id = ? AND song_id = ? AND amount > 0').get(userId, songId);
+    const currentTotal = record.total || 0;
+    return (currentTotal + newPoints) <= 3;
+}
+
+function recordVote(userId, songId, amount) {
+    db.prepare('INSERT INTO votes (song_id, voter_id, type, timestamp, amount) VALUES (?, ?, ?, ?, ?)').run(songId, userId, 'VOTE', Date.now(), amount);
+}
 
 // --- LEADERBOARD ---
 async function updateLeaderboard(guild) {
@@ -156,16 +148,18 @@ async function updateLeaderboard(guild) {
     if (trackMsg) await trackMsg.edit({ embeds: [trackEmbed] }); else await channel.send({ embeds: [trackEmbed] });
 }
 
+// --- FIXED EMBED UPDATER ---
 async function updatePublicEmbed(guild, songId) {
     const song = getSongStats(songId);
     if (!song || !song.message_id) return;
     
-    // SMART LOOKUP: Check New Channel first, then Legacy
-    let channelId = song.channel_id || CHANNEL_LEGACY;
-    // If channel_id wasn't saved (old song), we default to finding it in the map logic or legacy
-    // Ideally, we try the saved ID first.
+    // 1. Try the saved channel ID
+    let channelId = song.channel_id;
     
-    const channel = guild.channels.cache.get(channelId) || guild.channels.cache.get(CHANNEL_LEGACY);
+    // 2. Fallback if ID is missing (Old songs) or invalid
+    if (!channelId) channelId = CHANNEL_LEGACY;
+
+    const channel = guild.channels.cache.get(channelId);
     if (!channel) return;
 
     try {
@@ -185,21 +179,19 @@ async function updatePublicEmbed(guild, songId) {
 
             await message.edit({ embeds: [newEmbed] });
         }
-    } catch (e) { console.error(e); }
+    } catch (e) { console.error(`Update Embed Failed for Song ${songId}:`, e); }
 }
 
 async function finalizeSubmission(interaction, draft) {
     const finalTags = [draft.macro1, draft.micro1, draft.macro2, draft.micro2].filter(t => t && t !== 'SKIP');
     
-    // 1. DETERMINE CHANNEL ID
-    const targetChannelId = CHANNEL_ROUTER[draft.macro1] || CHANNEL_LEGACY; // Fallback just in case
+    // ROUTER LOGIC
+    const targetChannelId = CHANNEL_ROUTER[draft.macro1] || CHANNEL_LEGACY; 
 
-    // 2. SAVE TO DB (With Artist & Channel ID)
     const stmt = db.prepare('INSERT INTO songs (user_id, url, description, tags, timestamp, artist_name, channel_id) VALUES (?, ?, ?, ?, ?, ?, ?)');
     const info = stmt.run(interaction.user.id, draft.link, draft.description, JSON.stringify(finalTags), Date.now(), draft.artist_name, targetChannelId);
     const songId = info.lastInsertRowid;
 
-    // 3. POST TO DISCORD
     const channel = interaction.guild.channels.cache.get(targetChannelId);
     if (channel) {
         const primaryDisplay = `${draft.macro1} > ${draft.micro1}`;
@@ -252,11 +244,12 @@ client.on('interactionCreate', async interaction => {
 
         if (interaction.commandName === 'admin-delete') {
             if (!interaction.member.permissions.has('Administrator')) return interaction.reply({ content: "Admin only.", ephemeral: true });
+            
             const songId = interaction.options.getInteger('song_id');
             const song = getSongStats(songId);
-            if (!song) return interaction.reply({ content: `❌ Song ID ${songId} not found.`, ephemeral: true });
 
-            // LOOKUP CHANNEL
+            if (!song) return interaction.reply({ content: `❌ Song ID ${songId} not found in database.`, ephemeral: true });
+
             const targetChannelId = song.channel_id || CHANNEL_LEGACY;
             const channel = interaction.guild.channels.cache.get(targetChannelId);
             
@@ -267,8 +260,9 @@ client.on('interactionCreate', async interaction => {
                         if (msg.thread) await msg.thread.delete(); 
                         await msg.delete(); 
                     }
-                } catch (e) { console.log("Message/Thread already gone."); }
+                } catch (e) { console.log("Message/Thread already gone from Discord."); }
             }
+
             db.prepare('DELETE FROM songs WHERE id = ?').run(songId);
             await interaction.reply({ content: `🗑️ **Terminated.** Song ID ${songId} deleted.`, ephemeral: true });
         }
@@ -281,19 +275,18 @@ client.on('interactionCreate', async interaction => {
             const modal = new ModalBuilder().setCustomId('submission_modal').setTitle('Submit a Track');
             const linkInput = new TextInputBuilder().setCustomId('song_link').setLabel("Link").setStyle(TextInputStyle.Short).setRequired(true);
             const descInput = new TextInputBuilder().setCustomId('song_desc').setLabel("Description").setStyle(TextInputStyle.Paragraph).setMaxLength(100).setRequired(true);
-            // NEW OPTIONAL FIELD
             const artistInput = new TextInputBuilder().setCustomId('artist_name').setLabel("Artist/Band Name (Optional)").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(50);
 
             modal.addComponents(
                 new ActionRowBuilder().addComponents(linkInput), 
-                new ActionRowBuilder().addComponents(artistInput), // Added here
+                new ActionRowBuilder().addComponents(artistInput),
                 new ActionRowBuilder().addComponents(descInput)
             );
             await interaction.showModal(modal);
         }
         if (interaction.commandName === 'profile') {
             const user = getUser(interaction.user.id);
-            const embed = new EmbedBuilder().setColor(0x9b59b6).setTitle(`👤 Agent Profile: ${interaction.user.username}`).addFields({ name: '💰 Credits', value: `${user.credits} / 60`, inline: true }, { name: '🏆 Lifetime Score', value: `${user.lifetime_points}`, inline: true }, { name: '📅 Daily Progress', value: `${user.daily_points} / 40 pts`, inline: true }).setThumbnail(interaction.user.displayAvatarURL());
+            const embed = new EmbedBuilder().setColor(0x9b59b6).setTitle(`👤 Agent Profile: ${interaction.user.username}`).addFields({ name: '💰 Credits', value: `${user.credits} / 60`, inline: true }, { name: '🏆 Lifetime Score', value: `${user.lifetime_points}`, inline: true }, { name: '📅 Daily Progress', value: `${user.daily_points} / ${DAILY_POINT_CAP} pts`, inline: true }).setThumbnail(interaction.user.displayAvatarURL());
             await interaction.reply({ embeds: [embed], ephemeral: true });
         }
         if (interaction.commandName === 'top') {
@@ -327,7 +320,7 @@ client.on('interactionCreate', async interaction => {
         const link = interaction.fields.getTextInputValue('song_link');
         if (!isValidLink(link)) return interaction.reply({ content: "❌ **Security Alert:** Link not allowed.", ephemeral: true });
         const desc = interaction.fields.getTextInputValue('song_desc');
-        const artist = interaction.fields.getTextInputValue('artist_name'); // Capture Artist
+        const artist = interaction.fields.getTextInputValue('artist_name'); 
 
         draftSubmissions.set(interaction.user.id, { link, description: desc, artist_name: artist });
         
@@ -351,7 +344,6 @@ client.on('interactionCreate', async interaction => {
         const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`vote_1_${songId}`).setLabel('+1 Vote (Cost: 1)').setStyle(ButtonStyle.Secondary), new ButtonBuilder().setCustomId(`vote_2_${songId}`).setLabel('+2 Votes (Cost: 2)').setStyle(ButtonStyle.Secondary), new ButtonBuilder().setCustomId(`vote_3_${songId}`).setLabel('🔥 God Mode +3 (Cost: 3)').setStyle(ButtonStyle.Success));
         if (user.lifetime_points >= 50) row.addComponents(new ButtonBuilder().setCustomId(`vote_neg1_${songId}`).setLabel('👎 Dislike (Cost: 3)').setStyle(ButtonStyle.Danger));
         
-        // CONCIERGE MODE: Send via DM if possible, or ephemeral if DM closed
         try {
             await interaction.user.send({ content: `**Review Submitted!**\n${msg}`, components: [row] });
             await interaction.reply({ content: "✅ **Check your DMs!** I sent the voting menu there so you can keep scrolling.", ephemeral: true });
@@ -360,7 +352,9 @@ client.on('interactionCreate', async interaction => {
         }
 
         const song = getSongStats(songId);
+        // --- FIX: Use the stored channel ID or fallback to legacy ---
         const targetChannelId = song.channel_id || CHANNEL_LEGACY;
+        
         if (song && song.message_id) {
             try {
                 const channel = interaction.guild.channels.cache.get(targetChannelId);
@@ -459,7 +453,6 @@ client.on('interactionCreate', async interaction => {
             const link = interaction.message.embeds[0].fields[0].value;
             const reviewBtn = new ButtonBuilder().setCustomId(`review_${songId}`).setLabel('⭐ Review & Earn').setStyle(ButtonStyle.Success);
             
-            // CONCIERGE MODE: Send DM
             try {
                 await interaction.user.send({ 
                     content: `⏳ **Timer Started!**\nListen here: ${link}\n\nCome back and click **Review** below after 45 seconds.`, 
@@ -467,7 +460,6 @@ client.on('interactionCreate', async interaction => {
                 });
                 await interaction.reply({ content: "📩 **Check your DMs!** I sent the listening timer there.", ephemeral: true });
             } catch (e) {
-                // Fallback if DMs are closed
                 await interaction.reply({ 
                     content: `⏳ **Timer Started!**\nListen here: ${link}\n\nCome back and click **Review** after 45 seconds.`, 
                     components: [new ActionRowBuilder().addComponents(reviewBtn)], 
@@ -499,17 +491,27 @@ client.on('interactionCreate', async interaction => {
             const songId = parts[2];
             let cost = type === 'neg1' ? 3 : parseInt(type);
             let pointsToAdd = type === 'neg1' ? -1 : parseInt(type);
+            
+            // --- FIX: CHECK VOTE CAP ---
+            if (pointsToAdd > 0) {
+                if (!canUserVote(interaction.user.id, songId, pointsToAdd)) {
+                    return interaction.reply({ content: `🛑 **Vote Limit Reached.** You can only give a total of 3 Upvotes per song.`, ephemeral: true });
+                }
+            }
+
             const success = spendCredits(interaction.user.id, cost);
             if (success) {
+                // Record the vote for future checking
+                if (pointsToAdd > 0) recordVote(interaction.user.id, songId, pointsToAdd);
+                
                 modifyUpvotes(songId, pointsToAdd);
                 await updatePublicEmbed(interaction.guild, songId); 
                 const user = getUser(interaction.user.id);
                 const actionText = pointsToAdd > 0 ? `Added +${pointsToAdd} Upvotes` : `Removed 1 Upvote`;
                 
-                // DM FEEDBACK IF POSSIBLE
                 try {
                     await interaction.user.send(`✅ **Success!** ${actionText}.\n💰 Remaining Balance: ${user.credits}`);
-                    if (interaction.message.type === 0) await interaction.update({ content: "Vote Recorded.", components: [] }); // Clean up if it was a DM message
+                    if (interaction.message.type === 0) await interaction.update({ content: "Vote Recorded.", components: [] });
                 } catch(e) {
                     await interaction.update({ content: `✅ **Success!** ${actionText}.\n💰 Remaining Balance: ${user.credits}`, components: [] });
                 }
