@@ -9,16 +9,16 @@
     "Drum & Bass", "Dubstep", "Jungle", "Trap", "Garage", "Liquid DnB", "Neurofunk", "Breakbeat", "Glitch Hop", "Hardstyle"
   ],
   "Rock: Classic & Hard": [
-    "Classic Rock", "Hard Rock", "Blues Rock", "Psych Rock", "Glam Rock", "Southern Rock", "Prog Rock", "Arena Rock", "Rock & Roll", "Soft Rock"
+    "Classic Rock", "Hard Rock", "Blues Rock", "Psych Rock", "Glam Rock", "Southern Rock", "Prog Rock", "Arena Rock", "Stoner Rock", "Soft Rock"
   ],
   "Rock: Metal & Heavy": [
-    "Heavy Metal", "Thrash Metal", "Death Metal", "Doom Metal", "Black Metal", "Industrial Metal", "Metalcore", "Nu Metal", "Power Metal", "Symphonic Metal"
+    "Heavy Metal", "Thrash Metal", "Death Metal", "Doom Metal", "Black Metal", "Industrial Metal", "Metalcore", "Nu Metal", "Stoner Metal", "Symphonic Metal"
   ],
   "Rock: Indie & Alt": [
     "Indie Rock", "Alt Rock", "Shoegaze", "Grunge", "Post-Punk", "Britpop", "Dream Pop", "Emo", "Pop Punk", "Math Rock"
   ],
   "Hip Hop & Rap": [
-    "Old School", "Trap", "Boom Bap", "Drill", "Gangsta Rap", "Conscious Hip Hop", "Lo-Fi Hip Hop", "Experimental Hip Hop", "Cloud Rap", "Grime"
+    "Old School", "Trap", "Boom Bap", "Drill", "Trip Hop", "Lo-Fi Hip Hop", "Experimental Hip Hop", "Cloud Rap", "Grime", "Gangsta Rap"
   ],
   "Pop & R&B": [
     "Contemporary R&B", "Soul", "Disco", "Funk", "Synthpop", "K-Pop", "J-Pop", "Indie Pop", "Electropop", "Neo-Soul"
@@ -36,7 +36,7 @@
     "Swing", "Bebop", "Cool Jazz", "Fusion", "Smooth Jazz", "Chicago Blues", "Delta Blues", "Soul Jazz", "Free Jazz", "Big Band"
   ],
   "Cinematic & Score": [
-    "Orchestral", "Epic/Trailer", "Fantasy", "Sci-Fi", "Horror", "Ambient", "Drone", "Neoclassical", "Game OST", "Choral"
+    "Orchestral", "Epic/Trailer", "Fantasy", "Sci-Fi", "Horror", "Ambient", "Drone", "Neoclassical", "Game OST", "Downtempo"
   ],
   "World & International": [
     "Celtic", "Afrobeat", "Bollywood", "Flamenco", "Middle Eastern", "Nordic Folk", "Chanson", "Tango", "Samba", "Highlife"
