@@ -3,7 +3,9 @@ const { REST, Routes, SlashCommandBuilder } = require('discord.js');
 
 const commands = [
     new SlashCommandBuilder().setName('submit').setDescription('Submit a song to the community'),
-    new SlashCommandBuilder().setName('profile').setDescription('View your Credits, Rank, and Stats'),
+    new SlashCommandBuilder().setName('profile').setDescription('Check your stats privately'),
+    // NEW COMMAND
+    new SlashCommandBuilder().setName('share-profile').setDescription('Post your stats publicly for everyone to see'),
     
     new SlashCommandBuilder()
         .setName('top')
@@ -26,12 +28,11 @@ const commands = [
 
     new SlashCommandBuilder().setName('init-leaderboard').setDescription('Admin Only: Spawn the leaderboard'),
     new SlashCommandBuilder().setName('init-welcome').setDescription('Admin Only: Spawn the TOS Gate'),
-
-    // --- NEW: THE JANITOR ---
+    
     new SlashCommandBuilder()
         .setName('admin-delete')
         .setDescription('Admin Only: Remove a song from DB and Discord')
-        .addIntegerOption(option => option.setName('song_id').setDescription(' The ID of the song to remove').setRequired(true)),
+        .addIntegerOption(option => option.setName('song_id').setDescription('The ID of the song to remove').setRequired(true)),
 ];
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);

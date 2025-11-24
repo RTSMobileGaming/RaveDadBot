@@ -1,27 +1,27 @@
 {
   "EDM: House & Techno": [
-    "Deep House", "Tech House", "Acid House", "Minimal", "Progressive House", "Melodic Techno", "Hard Techno", "Detroit Techno", "Lo-Fi House", "Bass House"
+    "Deep House", "Tech House", "Acid House", "Minimal", "Progressive House", "Melodic Techno", "Hard Techno", "Detroit Techno", "Lo-Fi House", "Bass House", "Industrial"
   ],
   "EDM: Trance & Synth": [
-    "Synthwave", "Vocal Trance", "Psytrance", "Uplifting Trance", "Cyberpunk", "Darksynth", "Eurodance", "Hard Trance", "Goa Trance", "Dream Trance"
+    "Synthwave", "Vocal Trance", "Psytrance", "Uplifting Trance", "Cyberpunk", "Darksynth", "Eurodance", "Hard Trance", "Goa Trance", "Hardstyle", "Retro", "Darkwave"
   ],
   "EDM: Bass & Breakbeat": [
-    "Drum & Bass", "Dubstep", "Jungle", "Trap", "Garage", "Liquid DnB", "Neurofunk", "Breakbeat", "Glitch Hop", "Hardstyle"
+    "Drum & Bass", "Dubstep", "Jungle", "Trap", "Garage", "Liquid DnB", "Neurofunk", "Breakbeat", "Glitch Hop", "Hardstyle (Raw)"
   ],
   "Rock: Classic & Hard": [
-    "Classic Rock", "Hard Rock", "Blues Rock", "Psych Rock", "Glam Rock", "Southern Rock", "Prog Rock", "Arena Rock", "Stoner Rock", "Soft Rock"
+    "Classic Rock", "Hard Rock", "Blues Rock", "Psych Rock", "Glam Rock", "Southern Rock", "Prog Rock", "Arena Rock", "Stoner Rock", "Soft Rock", "Epic Rock"
   ],
   "Rock: Metal & Heavy": [
-    "Heavy Metal", "Thrash Metal", "Death Metal", "Doom Metal", "Black Metal", "Industrial Metal", "Metalcore", "Nu Metal", "Stoner Metal", "Symphonic Metal"
+    "Heavy Metal", "Thrash Metal", "Death Metal", "Doom Metal", "Black Metal", "Industrial Metal", "Metalcore", "Nu Metal", "Stoner Metal", "Symphonic Metal", "Power Metal", "Epic Metal", "Gothic Metal"
   ],
   "Rock: Indie & Alt": [
-    "Indie Rock", "Alt Rock", "Shoegaze", "Grunge", "Post-Punk", "Britpop", "Dream Pop", "Emo", "Pop Punk", "Math Rock"
+    "Indie Rock", "Alt Rock", "Shoegaze", "Grunge", "Post-Punk", "Britpop", "Dream Pop", "Emo", "Pop Punk", "Math Rock", "Gothic Rock"
   ],
   "Hip Hop & Rap": [
     "Old School", "Trap", "Boom Bap", "Drill", "Trip Hop", "Lo-Fi Hip Hop", "Experimental Hip Hop", "Cloud Rap", "Grime", "Gangsta Rap"
   ],
   "Pop & R&B": [
-    "Contemporary R&B", "Soul", "Disco", "Funk", "Synthpop", "K-Pop", "J-Pop", "Indie Pop", "Electropop", "Neo-Soul", "Acoustic"
+    "Contemporary R&B", "Soul", "Disco", "Funk", "Synthpop", "K-Pop", "J-Pop", "Indie Pop", "Electropop", "Neo-Soul", "Acoustic Pop", "Anison"
   ],
   "Latin & Reggae": [
     "Reggaeton", "Dancehall", "Salsa", "Bachata", "Roots Reggae", "Dub", "Ska", "Latin Trap", "Bossa Nova", "Cumbia"
@@ -42,6 +42,6 @@
     "Celtic", "Afrobeat", "Bollywood", "Flamenco", "Middle Eastern", "Nordic Folk", "Chanson", "Tango", "Samba", "Highlife"
   ],
   "Experimental & AI": [
-    "Glitch", "Noise", "IDM", "Vaporwave", "Hyperpop", "Mashup", "Plunderphonics", "Sound Collage", "Generative", "Avant-Garde"
+    "Glitch", "Noise", "IDM", "Vaporwave", "Hyperpop", "Mashup", "Plunderphonics", "Sound Collage", "Generative", "Avant-Garde", "Parody"
   ]
 }
