@@ -4,9 +4,25 @@ const { REST, Routes, SlashCommandBuilder } = require('discord.js');
 const commands = [
     new SlashCommandBuilder().setName('submit').setDescription('Submit a song to the community'),
     new SlashCommandBuilder().setName('profile').setDescription('Check your stats privately'),
-    // NEW COMMAND
-    new SlashCommandBuilder().setName('share-profile').setDescription('Post your stats publicly for everyone to see'),
+    new SlashCommandBuilder().setName('share-profile').setDescription('Post your stats publicly'),
+    new SlashCommandBuilder().setName('weekly-report').setDescription('Admin Only: Generate weekly report'),
     
+    // NEW: PORTFOLIO COMMANDS
+    new SlashCommandBuilder()
+        .setName('songs')
+        .setDescription('View a user\'s last 5 submissions (Private)')
+        .addUserOption(option => option.setName('user').setDescription('The user to look up (defaults to you)')),
+    
+    new SlashCommandBuilder()
+        .setName('share-songs')
+        .setDescription('Share a user\'s last 5 submissions (Public)')
+        .addUserOption(option => option.setName('user').setDescription('The user to look up (defaults to you)')),
+
+    new SlashCommandBuilder()
+        .setName('stage')
+        .setDescription('Play a song in the Live Session (Earns credits)')
+        .addStringOption(option => option.setName('link').setDescription('The song URL').setRequired(true)),
+
     new SlashCommandBuilder()
         .setName('top')
         .setDescription('Find top rated songs by genre')
@@ -22,7 +38,10 @@ const commands = [
                 { name: 'Hip Hop & Rap', value: 'Hip Hop & Rap' },
                 { name: 'Pop & R&B', value: 'Pop & R&B' },
                 { name: 'Country: Modern & Pop', value: 'Country: Modern & Pop' },
+                { name: 'Country: Trad & Folk', value: 'Country: Trad & Folk' },
+                { name: 'Jazz & Blues', value: 'Jazz & Blues' },
                 { name: 'Cinematic & Score', value: 'Cinematic & Score' },
+                { name: 'World & International', value: 'World & International' },
                 { name: 'Experimental & AI', value: 'Experimental & AI' }
             )),
 
@@ -42,7 +61,5 @@ const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
         console.log('Started refreshing application (/) commands.');
         await rest.put(Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID), { body: commands });
         console.log('Successfully reloaded application (/) commands.');
-    } catch (error) {
-        console.error(error);
-    }
+    } catch (error) { console.error(error); }
 })();
