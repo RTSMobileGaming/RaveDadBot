@@ -16,6 +16,7 @@ const client = new Client({
 });
 
 // --- CONFIGURATION ---
+// PASTE YOUR CHANNEL IDs HERE
 const CHANNEL_LEADERBOARD = '1441545661316206685';
 const CHANNEL_MOD_QUEUE = '1441526604449710133';
 const CHANNEL_LEGACY = '1441526523659026626'; 
@@ -140,7 +141,17 @@ function truncate(str, n){ return (str.length > n) ? str.slice(0, n-1) + '...' :
 function getRankIcon(index) { return index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`; }
 
 function canUserVote(userId, songId, newPoints) {
-    if (newPoints < 0) return true; 
+    if (newPoints < 0) return true; // Allow dislike
+    
+    // Check Self-Vote Cap (Max 1)
+    const song = getSongStats(songId);
+    if (song && song.user_id === userId) {
+        const record = db.prepare('SELECT SUM(amount) as total FROM votes WHERE voter_id = ? AND song_id = ? AND amount > 0').get(userId, songId);
+        const currentTotal = record.total || 0;
+        return (currentTotal + newPoints) <= 1; // Author Limit
+    }
+
+    // Check General Vote Cap (Max 3)
     const record = db.prepare('SELECT SUM(amount) as total FROM votes WHERE voter_id = ? AND song_id = ? AND amount > 0').get(userId, songId);
     const currentTotal = record.total || 0;
     return (currentTotal + newPoints) <= 3;
@@ -150,51 +161,34 @@ function recordVote(userId, songId, amount) {
     db.prepare('INSERT INTO votes (song_id, voter_id, type, timestamp, amount) VALUES (?, ?, ?, ?, ?)').run(songId, userId, 'VOTE', Date.now(), amount);
 }
 
-// --- NEW: GENERATE DISCOGRAPHY CARD ---
 function generateSongListEmbed(targetUser, songs) {
-    const embed = new EmbedBuilder()
-        .setColor(0x00FFFF) // Cyan
-        .setTitle(`💿 Discography: ${targetUser.username}`)
-        .setThumbnail(targetUser.displayAvatarURL());
-
-    if (songs.length === 0) {
-        embed.setDescription("*This user hasn't dropped any tracks yet.*");
-        return embed;
-    }
-
+    const embed = new EmbedBuilder().setColor(0x00FFFF).setTitle(`💿 Discography: ${targetUser.username}`).setThumbnail(targetUser.displayAvatarURL());
+    if (songs.length === 0) { embed.setDescription("*This user hasn't dropped any tracks yet.*"); return embed; }
     const songList = songs.map((s, i) => {
         const title = s.title ? truncate(s.title, 25) : 'Untitled Track';
         const channelId = s.channel_id || CHANNEL_LEGACY;
         const msgLink = s.message_id ? `https://discord.com/channels/${process.env.GUILD_ID}/${channelId}/${s.message_id}` : s.url;
         const tags = JSON.parse(s.tags);
-        
         return `${i+1}. **[${title}](${msgLink})**\n└ ${tags[1]} • 🔥 **${s.upvotes}**`;
     }).join('\n\n');
-
     embed.setDescription(songList);
     embed.setFooter({ text: 'Click song title to jump to discussion.' });
     return embed;
 }
 
-// --- LEADERBOARD SYSTEM ---
 async function updateLeaderboard(guild) {
     const channel = guild.channels.cache.get(CHANNEL_LEADERBOARD);
     if (!channel) return;
-
     const topCritics = db.prepare('SELECT id, lifetime_points FROM users ORDER BY lifetime_points DESC LIMIT 10').all();
     const criticList = topCritics.map((u, i) => `${getRankIcon(i)} <@${u.id}> • **${u.lifetime_points}** pts`).join('\n') || "No data.";
-
     const topArtists = db.prepare('SELECT user_id, COUNT(*) as count FROM songs GROUP BY user_id ORDER BY count DESC LIMIT 10').all();
     const artistList = topArtists.map((u, i) => `${getRankIcon(i)} <@${u.user_id}> • **${u.count}** Songs`).join('\n') || "No data.";
-
     const topSongs = db.prepare('SELECT id, url, upvotes, title FROM songs ORDER BY upvotes DESC LIMIT 10').all();
     const songList = topSongs.map((s, i) => {
         const displayTitle = s.title ? truncate(s.title, 20) : `Track ${s.id}`;
         return `${getRankIcon(i)} [${displayTitle}](${s.url}) • 🔥 **${s.upvotes}**`;
     }).join('\n') || "No data.";
-
     const embedLifetime = new EmbedBuilder().setColor(0xFFD700).setTitle('🏆 ALL-TIME HALL OF FAME').addFields({ name: '👑 Top Critics', value: criticList, inline: true }, { name: '🎨 Top Artists', value: artistList, inline: true }, { name: '🔥 Top Tracks', value: songList, inline: true }).setFooter({ text: 'Eternal Glory' });
-
     const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
     const weekCritics = db.prepare(`SELECT user_id as id, COUNT(*) * 2 as score FROM reviews WHERE timestamp > ? GROUP BY user_id ORDER BY score DESC LIMIT 10`).all(sevenDaysAgo);
     const weekCriticList = weekCritics.map((u, i) => `${getRankIcon(i)} <@${u.id}> • **${u.score}** pts`).join('\n') || "No data.";
@@ -207,48 +201,50 @@ async function updateLeaderboard(guild) {
         const displayTitle = song.title ? truncate(song.title, 20) : 'Track';
         return `${getRankIcon(i)} [${displayTitle}](${song.url}) • 🔥 **+${stat.score}**`;
     }).join('\n') || "No data.";
-
     const embedWeekly = new EmbedBuilder().setColor(0x00FF00).setTitle('📅 WEEKLY CHARTS (Last 7 Days)').addFields({ name: '🚀 Top Critics', value: weekCriticList, inline: true }, { name: '🎨 Top Artists', value: weekArtistList, inline: true }, { name: '🔥 Top Tracks', value: weekSongList, inline: true }).setFooter({ text: `Updated: ${new Date().toLocaleTimeString()}` });
-
     const messages = await channel.messages.fetch({ limit: 5 });
     const msgLifetime = messages.find(m => m.embeds[0]?.title === '🏆 ALL-TIME HALL OF FAME');
     const msgWeekly = messages.find(m => m.embeds[0]?.title === '📅 WEEKLY CHARTS (Last 7 Days)');
-
     if (msgLifetime) await msgLifetime.edit({ embeds: [embedLifetime] }); else await channel.send({ embeds: [embedLifetime] });
     if (msgWeekly) await msgWeekly.edit({ embeds: [embedWeekly] }); else await channel.send({ embeds: [embedWeekly] });
 }
-
-// --- VOICE PAYROLL ---
-setInterval(() => {
-    const guild = client.guilds.cache.get(process.env.GUILD_ID);
-    if (!guild) return;
-    const voiceChannel = guild.channels.cache.get(CHANNEL_VOICE_PARTY);
-    if (!voiceChannel || voiceChannel.members.size < 2) return; 
-    voiceChannel.members.forEach(member => {
-        if (!member.voice.selfDeaf && !member.voice.serverDeaf) {
-            addPoints(member.id, VOICE_PAYOUT);
-        }
-    });
-}, 15 * 60 * 1000);
 
 // --- SHARED UPDATE LOGIC ---
 async function updatePublicEmbed(guild, songId) {
     const song = getSongStats(songId);
     if (!song || !song.message_id) return;
+    
+    // 1. Update Archive/Fresh Drop
     let channelId = song.channel_id || CHANNEL_LEGACY;
     const channel = guild.channels.cache.get(channelId);
-    if (!channel) return;
-    try {
-        const message = await channel.messages.fetch(song.message_id);
-        if (message) {
-            const tags = JSON.parse(song.tags); 
-            const primaryDisplay = `${tags[0]} > ${tags[1]}`;
-            const secondaryDisplay = tags[2] && tags[2] !== 'SKIP' ? `\n${tags[2]} > ${tags[3]}` : '';
-            const artistField = song.artist_name ? `**Artist:** ${song.artist_name}\n` : '';
-            const newEmbed = new EmbedBuilder().setColor(0x0099FF).setTitle('🔥 Fresh Drop Alert').setDescription(`**User:** <@${song.user_id}>\n${artistField}**Genres:**\n${primaryDisplay}${secondaryDisplay}\n\n**Description:**\n${song.description}`).addFields({ name: 'Listen Here', value: song.url }).setFooter({ text: `Song ID: ${songId} | 🔥 Score: ${song.upvotes} | 👀 Views: ${song.views}` });
-            await message.edit({ embeds: [newEmbed] });
-        }
-    } catch (e) { console.error(`Update Embed Failed for Song ${songId}:`, e); }
+    if (channel) {
+        try {
+            const message = await channel.messages.fetch(song.message_id);
+            if (message) {
+                const tags = JSON.parse(song.tags); 
+                const primaryDisplay = `${tags[0]} > ${tags[1]}`;
+                const secondaryDisplay = tags[2] && tags[2] !== 'SKIP' ? `\n${tags[2]} > ${tags[3]}` : '';
+                const artistField = song.artist_name ? `**Artist:** ${song.artist_name}\n` : '';
+                const newEmbed = new EmbedBuilder().setColor(0x0099FF).setTitle('🔥 Fresh Drop Alert').setDescription(`**User:** <@${song.user_id}>\n${artistField}**Genres:**\n${primaryDisplay}${secondaryDisplay}\n\n**Description:**\n${song.description}`).addFields({ name: 'Listen Here', value: song.url }).setFooter({ text: `Song ID: ${songId} | 🔥 Score: ${song.upvotes} | 👀 Views: ${song.views}` });
+                await message.edit({ embeds: [newEmbed] });
+            }
+        } catch (e) { console.error(`Update Embed Failed for Song ${songId}:`, e); }
+    }
+
+    // 2. Update Session Log "Now Playing" Card (Best Effort)
+    const logChannel = guild.channels.cache.get(CHANNEL_SESSION_LOG);
+    if (logChannel) {
+        try {
+            // Scan last 10 messages to see if this song is on "Stage"
+            const logs = await logChannel.messages.fetch({ limit: 10 });
+            const card = logs.find(m => m.embeds[0]?.footer?.text.includes(`ID: ${songId}`));
+            if (card) {
+                const oldEmbed = card.embeds[0];
+                const newEmbed = new EmbedBuilder(oldEmbed.data).setFooter({ text: `ID: ${songId} | Score: ${song.upvotes}` });
+                await card.edit({ embeds: [newEmbed] });
+            }
+        } catch (e) { /* Ignore if not found */ }
+    }
 }
 
 async function finalizeSubmission(interaction, draft) {
@@ -274,6 +270,18 @@ async function finalizeSubmission(interaction, draft) {
     await interaction.update({ content: `✅ **Submission Complete!** Posted to <#${targetChannelId}>.`, components: [] });
     draftSubmissions.delete(interaction.user.id);
 }
+
+setInterval(() => {
+    const guild = client.guilds.cache.get(process.env.GUILD_ID);
+    if (!guild) return;
+    const voiceChannel = guild.channels.cache.get(CHANNEL_VOICE_PARTY);
+    if (!voiceChannel || voiceChannel.members.size < 2) return; 
+    voiceChannel.members.forEach(member => {
+        if (!member.voice.selfDeaf && !member.voice.serverDeaf) {
+            addPoints(member.id, VOICE_PAYOUT);
+        }
+    });
+}, 15 * 60 * 1000);
 
 client.once('ready', () => {
     console.log(`Logged in as ${client.user.tag}!`);
@@ -308,22 +316,6 @@ client.on('interactionCreate', async interaction => {
             }
             db.prepare('DELETE FROM songs WHERE id = ?').run(songId);
             await interaction.reply({ content: `🗑️ **Terminated.** Song ID ${songId} deleted.`, ephemeral: true });
-        }
-
-        // --- NEW: SONGS (PRIVATE) ---
-        if (interaction.commandName === 'songs') {
-            const targetUser = interaction.options.getUser('user') || interaction.user;
-            const songs = db.prepare('SELECT * FROM songs WHERE user_id = ? ORDER BY timestamp DESC LIMIT 5').all(targetUser.id);
-            const embed = generateSongListEmbed(targetUser, songs);
-            await interaction.reply({ embeds: [embed], ephemeral: true });
-        }
-
-        // --- NEW: SHARE SONGS (PUBLIC) ---
-        if (interaction.commandName === 'share-songs') {
-            const targetUser = interaction.options.getUser('user') || interaction.user;
-            const songs = db.prepare('SELECT * FROM songs WHERE user_id = ? ORDER BY timestamp DESC LIMIT 5').all(targetUser.id);
-            const embed = generateSongListEmbed(targetUser, songs);
-            await interaction.reply({ content: `🎵 **Recent Tracks by ${targetUser.username}**`, embeds: [embed], ephemeral: false });
         }
 
         if (interaction.commandName === 'weekly-report') {
@@ -368,13 +360,11 @@ client.on('interactionCreate', async interaction => {
                 await logChannel.send({ embeds: [embed], components: [row] });
                 await interaction.reply({ content: "✅ Queued existing track.", ephemeral: true });
             } else {
-                // --- FIX: CHECK LIMIT FOR NEW SONGS ---
                 const submissionCount = checkDailyLimit(interaction.user.id);
                 if (submissionCount >= DAILY_SUBMISSION_LIMIT) {
                     const cooldownTimestamp = getSubmissionCooldown(interaction.user.id);
                     return interaction.reply({ content: `🛑 **Daily Limit Reached!** You cannot stage NEW songs until <t:${cooldownTimestamp}:R>. (Playing existing songs is free).`, ephemeral: true });
                 }
-                
                 const modal = new ModalBuilder().setCustomId(`stage_modal`).setTitle('Quick Add to Stage');
                 draftSubmissions.set(interaction.user.id, { link: link, is_stage: true });
                 const titleInput = new TextInputBuilder().setCustomId('song_title').setLabel("Song Title").setStyle(TextInputStyle.Short).setRequired(true);
@@ -420,6 +410,20 @@ client.on('interactionCreate', async interaction => {
             const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('accept_tos').setLabel('✅ I Accept & Enter').setStyle(ButtonStyle.Success));
             await interaction.channel.send({ embeds: [embed], components: [row] });
             await interaction.reply({ content: "Gatekeeper initialized.", ephemeral: true });
+        }
+        
+        if (interaction.commandName === 'songs') {
+            const targetUser = interaction.options.getUser('user') || interaction.user;
+            const songs = db.prepare('SELECT * FROM songs WHERE user_id = ? ORDER BY timestamp DESC LIMIT 5').all(targetUser.id);
+            const embed = generateSongListEmbed(targetUser, songs);
+            await interaction.reply({ embeds: [embed], ephemeral: true });
+        }
+
+        if (interaction.commandName === 'share-songs') {
+            const targetUser = interaction.options.getUser('user') || interaction.user;
+            const songs = db.prepare('SELECT * FROM songs WHERE user_id = ? ORDER BY timestamp DESC LIMIT 5').all(targetUser.id);
+            const embed = generateSongListEmbed(targetUser, songs);
+            await interaction.reply({ content: `🎵 **Recent Tracks by ${targetUser.username}**`, embeds: [embed], ephemeral: false });
         }
     }
 
@@ -661,16 +665,20 @@ client.on('interactionCreate', async interaction => {
                 const guild = client.guilds.cache.get(process.env.GUILD_ID);
                 await updatePublicEmbed(guild, songId); 
                 
+                // --- FIX: CALCULATE TOTAL USER VOTES FOR FEEDBACK ---
+                const totalVotesRec = db.prepare('SELECT SUM(amount) as total FROM votes WHERE voter_id = ? AND song_id = ? AND amount > 0').get(interaction.user.id, songId);
+                const totalVotes = totalVotesRec ? totalVotesRec.total : pointsToAdd;
+                
                 const user = getUser(interaction.user.id);
                 const actionText = pointsToAdd > 0 ? `Added +${pointsToAdd} Upvotes` : `Removed 1 Upvote`;
                 
                 try {
-                    await interaction.user.send(`✅ **Success!** ${actionText}.\n💰 Remaining Balance: ${user.credits}`);
+                    await interaction.user.send(`✅ **Success!** ${actionText} (You have cast ${totalVotes}/3 votes for this song).\n💰 Remaining Balance: ${user.credits}`);
                     if (interaction.message && interaction.message.channel.type === ChannelType.DM) {
                          await interaction.update({ content: "Vote Recorded.", components: [] });
                     }
                 } catch(e) {
-                    await interaction.update({ content: `✅ **Success!** ${actionText}.\n💰 Remaining Balance: ${user.credits}`, components: [] });
+                    await interaction.update({ content: `✅ **Success!** ${actionText} (Total: ${totalVotes}/3).\n💰 Remaining Balance: ${user.credits}`, components: [] });
                 }
             } else {
                 await interaction.reply({ content: `❌ **Insufficient Credits!** Cost: ${cost}. Balance: ${getUser(interaction.user.id).credits}`, ephemeral: true });
