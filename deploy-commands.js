@@ -9,6 +9,17 @@ const commands = [
     
     // NEW: PORTFOLIO COMMANDS
     new SlashCommandBuilder()
+        .setName('admin-add-points')
+        .setDescription('Admin Only: Stimulus Package')
+        .addUserOption(option => option.setName('user').setDescription('Target User').setRequired(true))
+        .addIntegerOption(option => option.setName('amount').setDescription('Amount of Credits/Lifetime Pts').setRequired(true)),
+
+    new SlashCommandBuilder()
+        .setName('admin-set-bonus')
+        .setDescription('Admin Only: Increase Daily Submission Cap')
+        .addUserOption(option => option.setName('user').setDescription('Target User').setRequired(true))
+        .addIntegerOption(option => option.setName('extra_slots').setDescription('Additional slots (e.g. 1 means limit is 4)').setRequired(true)),
+    new SlashCommandBuilder()
         .setName('songs')
         .setDescription('View a user\'s last 5 submissions (Private)')
         .addUserOption(option => option.setName('user').setDescription('The user to look up (defaults to you)')),
