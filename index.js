@@ -172,7 +172,6 @@ async function updateLeaderboard(guild) {
     if (!channel) return;
     const sevenDaysAgo = Date.now() - 604800000;
 
-    // DATA HELPERS
     const getStats = () => ({
         totalS: db.prepare('SELECT COUNT(*) as c FROM songs').get().c,
         totalR: db.prepare('SELECT COUNT(*) as c FROM reviews').get().c,
@@ -180,36 +179,23 @@ async function updateLeaderboard(guild) {
         weekR: db.prepare('SELECT COUNT(*) as c FROM reviews WHERE timestamp > ?').get(sevenDaysAgo).c
     });
     const getList = (query, mapFn) => db.prepare(query).all().map(mapFn).join('\n') || "No data.";
-    
-    // 3. Lifetime Tracks List
-    const songMap = (s, i) => {
-        const artist = s.artist_name ? `**${s.artist_name}**` : 'Unknown';
-        const displayTitle = s.title ? truncate(s.title, 20) : `Track ${s.id}`;
-        return `${getRankIcon(i)} ${artist} - [${displayTitle}](${s.url}) • 🔥 **${s.upvotes || s.score}**`;
-    };
+    const songMap = (s, i) => `${getRankIcon(i)} ${s.artist_name ? `**${s.artist_name}** - ` : ''}[${truncate(s.title || 'Track', 20)}](${s.url}) • 🔥 **${s.upvotes || s.score}**`;
 
-    // EMBEDS
     const s = getStats();
     const embeds = [
-        // 1. SERVER STATS
         new EmbedBuilder().setColor(0x2F3136).setTitle('📊 SERVER PULSE').addFields(
             { name: 'Total Songs', value: `**${s.totalS}**`, inline: true }, { name: 'Total Reviews', value: `**${s.totalR}**`, inline: true }, { name: '\u200B', value: '\u200B', inline: true },
             { name: 'Weekly Songs', value: `**${s.weekS}**`, inline: true }, { name: 'Weekly Reviews', value: `**${s.weekR}**`, inline: true }, { name: '\u200B', value: '\u200B', inline: true }
         ),
-        // 2. LIFETIME PEOPLE
         new EmbedBuilder().setColor(0xFFD700).setTitle('🏆 ALL-TIME HALL OF FAME').addFields(
             { name: '👑 Top Critics', value: getList('SELECT id, lifetime_points FROM users ORDER BY lifetime_points DESC LIMIT 10', (u,i) => `${getRankIcon(i)} <@${u.id}> • **${u.lifetime_points}**`), inline: true },
             { name: '🎨 Top Artists', value: getList('SELECT user_id, COUNT(*) as c FROM songs GROUP BY user_id ORDER BY c DESC LIMIT 10', (u,i) => `${getRankIcon(i)} <@${u.user_id}> • **${u.c}**`), inline: true }
         ),
-        // 3. LIFETIME TRACKS
         new EmbedBuilder().setColor(0xFFA500).setTitle('🔥 LIFETIME: TOP TRACKS').setDescription(getList('SELECT * FROM songs ORDER BY upvotes DESC LIMIT 10', songMap)),
-        
-        // 4. WEEKLY PEOPLE
         new EmbedBuilder().setColor(0x00FF00).setTitle('📅 WEEKLY: TOP MEMBERS').addFields(
             { name: '🚀 Top Critics', value: db.prepare(`SELECT user_id as id, COUNT(*) * 2 as score FROM reviews WHERE timestamp > ${sevenDaysAgo} GROUP BY user_id ORDER BY score DESC LIMIT 10`).all().map((u,i) => `${getRankIcon(i)} <@${u.id}> • **${u.score}**`).join('\n') || "No data.", inline: true },
             { name: '🎨 Top Artists', value: db.prepare(`SELECT user_id, COUNT(*) as c FROM songs WHERE timestamp > ${sevenDaysAgo} GROUP BY user_id ORDER BY c DESC LIMIT 10`).all().map((u,i) => `${getRankIcon(i)} <@${u.user_id}> • **${u.c}**`).join('\n') || "No data.", inline: true }
         ),
-        // 5. WEEKLY TRACKS
         new EmbedBuilder().setColor(0x00FFFF).setTitle('📈 WEEKLY: TRENDING TRACKS').setDescription(db.prepare(`SELECT song_id, SUM(amount) as score FROM votes WHERE timestamp > ${sevenDaysAgo} AND amount > 0 GROUP BY song_id ORDER BY score DESC LIMIT 10`).all().map((stat, i) => {
             const song = db.prepare('SELECT * FROM songs WHERE id = ?').get(stat.song_id);
             return song ? songMap({...song, score: stat.score}, i) : '';
@@ -241,6 +227,7 @@ async function finalizeSubmission(interaction, draft) {
     draftSubmissions.delete(interaction.user.id);
 }
 
+// --- EVENTS ---
 client.once('ready', () => {
     console.log(`Logged in as ${client.user.tag}!`);
     setInterval(() => {
@@ -287,11 +274,11 @@ client.on('interactionCreate', async interaction => {
             const link = interaction.options.getString('link');
             if (!isValidLink(link)) return interaction.reply({ content: "❌ Invalid Link.", ephemeral: true });
             const existing = db.prepare('SELECT * FROM songs WHERE url = ?').get(link);
-            
+            const logChannel = interaction.guild.channels.cache.get(CHANNEL_SESSION_LOG);
             if (existing) {
                 const embed = new EmbedBuilder().setColor(0xFF00FF).setTitle('🔴 NOW PLAYING').setDescription(`**${existing.title || 'Track'}** by ${existing.artist_name || 'Unknown'}\n${existing.description}`).addFields({ name: 'Listen', value: link }).setFooter({ text: `ID: ${existing.id} | Score: ${existing.upvotes}` });
                 const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`vote_1_${existing.id}`).setLabel('🔥 Banger (+1)').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId(`scribe_${existing.id}`).setLabel('📝 Scribe Note').setStyle(ButtonStyle.Secondary));
-                await interaction.guild.channels.cache.get(CHANNEL_SESSION_LOG).send({ embeds: [embed], components: [row] });
+                await logChannel.send({ embeds: [embed], components: [row] });
                 await interaction.reply({ content: "✅ Queued existing track.", ephemeral: true });
             } else {
                 const cd = getCooldownTime(interaction.user.id);
@@ -335,19 +322,23 @@ client.on('interactionCreate', async interaction => {
             await interaction.editReply({ content: "✅ 5-Board System Initialized." });
         }
         if (interaction.commandName === 'init-welcome') {
-             // (Keep your welcome logic here if needed, assuming standard)
              if (!interaction.member.permissions.has('Administrator')) return interaction.reply({ content: "Admin only.", ephemeral: true });
              const embed = new EmbedBuilder().setColor(0xFF00FF).setTitle('🤖 Welcome to the Future of Music').setDescription(`We are a community of AI music creators dedicated to honest feedback and growth.\n\n**COMMUNITY RULES:**\n1. **Respect Everyone:** No hate speech, harassment, or toxicity.\n2. **Give to Get:** You must review songs to earn credits.\n3. **Honesty:** Low-effort spam reviews will result in a ban.\n4. **No Spam:** Don't DM members with self-promotion.\n\n*By clicking below, you agree to these terms.*`).setImage('https://media.discordapp.net/attachments/123456789/123456789/banner.png');
              const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('accept_tos').setLabel('✅ I Accept & Enter').setStyle(ButtonStyle.Success));
              await interaction.channel.send({ embeds: [embed], components: [row] });
              await interaction.reply({ content: "Gatekeeper initialized.", ephemeral: true });
         }
-        // Weekly report command remains...
         if (interaction.commandName === 'weekly-report') {
              if (!interaction.member.permissions.has('Administrator')) return interaction.reply({ content: "Admin only.", ephemeral: true });
              await interaction.deferReply({ ephemeral: true });
              updateLeaderboard(interaction.guild);
              await interaction.editReply({ content: "✅ Boards refreshed." });
+        }
+        if (interaction.commandName === 'songs' || interaction.commandName === 'share-songs') {
+            const targetUser = interaction.options.getUser('user') || interaction.user;
+            const songs = db.prepare('SELECT * FROM songs WHERE user_id = ? ORDER BY timestamp DESC LIMIT 5').all(targetUser.id);
+            const embed = generateSongListEmbed(targetUser, songs);
+            await interaction.reply({ content: interaction.commandName === 'share-songs' ? `🎵 **Recent Tracks by ${targetUser.username}**` : undefined, embeds: [embed], ephemeral: interaction.commandName === 'songs' });
         }
     }
 
@@ -434,8 +425,10 @@ client.on('interactionCreate', async interaction => {
             const songId = info.lastInsertRowid;
             const archiveChannel = client.guilds.cache.get(process.env.GUILD_ID).channels.cache.get(targetChannelId);
             if (archiveChannel) {
-                const embed = new EmbedBuilder().setColor(0x999999).setTitle('🎙️ Live Session Archive').setDescription(`**${draft.title}**\n${draft.artist_name}`).addFields({name: 'Listen', value: draft.link});
-                const msg = await archiveChannel.send({ embeds: [embed] });
+                const embed = new EmbedBuilder().setColor(0x0099FF).setTitle('🔥 Fresh Drop Alert (Live)').setDescription(`**User:** <@${interaction.user.id}>\n**Artist:** ${draft.artist_name}\n**Genres:** ${genre}\n\n**Description:**\n${draft.title} (Played Live)`).addFields({name: 'Listen Here', value: draft.link}).setFooter({text: `Song ID: ${songId} | 🔥 Score: 0 | 👀 Views: 0`});
+                const listenBtn = new ButtonBuilder().setCustomId(`listen_${songId}`).setLabel('🎧 Start Listening').setStyle(ButtonStyle.Primary);
+                const reportBtn = new ButtonBuilder().setCustomId(`report_${songId}`).setLabel('⚠️ Report').setStyle(ButtonStyle.Danger);
+                const msg = await archiveChannel.send({ embeds: [embed], components: [new ActionRowBuilder().addComponents(listenBtn, reportBtn)] });
                 db.prepare('UPDATE songs SET message_id = ? WHERE id = ?').run(msg.id, songId);
                 await msg.startThread({ name: `💬 Reviews: ${draft.title}`, autoArchiveDuration: 60 });
             }
@@ -499,7 +492,8 @@ client.on('interactionCreate', async interaction => {
             const songId = parts[1];
             listenTimers.set(`${interaction.user.id}_${songId}`, Date.now());
             incrementViews(songId);
-            await updatePublicEmbed(client.guilds.cache.get(process.env.GUILD_ID), songId);
+            const guild = client.guilds.cache.get(process.env.GUILD_ID);
+            await updatePublicEmbed(guild, songId);
             const link = interaction.message.embeds[0].fields[0].value;
             const reviewBtn = new ButtonBuilder().setCustomId(`review_${songId}`).setLabel('⭐ Review & Earn').setStyle(ButtonStyle.Success);
             try { await interaction.user.send({ content: `⏳ **Timer Started!**\nListen: ${link}\nClick below after 45s.`, components: [new ActionRowBuilder().addComponents(reviewBtn)] }); 
@@ -533,6 +527,14 @@ client.on('interactionCreate', async interaction => {
             const guild = client.guilds.cache.get(process.env.GUILD_ID);
             const modChannel = guild.channels.cache.get(CHANNEL_MOD_QUEUE);
             if (modChannel) modChannel.send(`⚠️ **Report:** Song ID ${parts[1]} reported by <@${interaction.user.id}>.`);
+        }
+        
+        if (action === 'scribe') {
+            const songId = parts[1];
+            const modal = new ModalBuilder().setCustomId(`scribe_submit_${songId}`).setTitle('Scribe a Note');
+            const input = new TextInputBuilder().setCustomId('scribe_note').setLabel('What was said?').setStyle(TextInputStyle.Paragraph).setRequired(true);
+            modal.addComponents(new ActionRowBuilder().addComponents(input));
+            await interaction.showModal(modal);
         }
     }
 });
