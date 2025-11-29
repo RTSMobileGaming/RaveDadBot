@@ -59,25 +59,50 @@ function getUser(userId) {
     return user;
 }
 
-function getCooldownTime(userId) {
+function getSubmissionCooldown(userId) {
     const songs = db.prepare('SELECT timestamp FROM songs WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?').all(userId, DAILY_SUBMISSION_LIMIT);
     if (songs.length < DAILY_SUBMISSION_LIMIT) return null;
     const unlock = songs[songs.length - 1].timestamp + 86400000;
     return Date.now() > unlock ? null : Math.floor(unlock / 1000);
 }
 
-function buildTrackEmbed(songData) {
-    const tags = JSON.parse(songData.tags);
-    const artist = songData.artist_name ? `**Artist:** ${songData.artist_name}\n` : '';
-    return new EmbedBuilder()
-        .setColor(0x0099FF)
-        .setTitle('🔥 Fresh Drop Alert')
-        .setDescription(`**User:** <@${songData.user_id}>\n${artist}**Genres:**\n${tags[0]} > ${tags[1]}\n${tags[2] ? `${tags[2]} > ${tags[3]}` : ''}\n\n**Description:**\n${songData.description}`)
-        .addFields({ name: 'Listen Here', value: songData.url })
-        .setFooter({ text: `Song ID: ${songData.id} | 🔥 Score: ${songData.upvotes || 0} | 👀 Views: ${songData.views || 0}` });
+function checkDailyLimit(userId) {
+    const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
+    const count = db.prepare('SELECT COUNT(*) as count FROM songs WHERE user_id = ? AND timestamp > ?').get(userId, oneDayAgo);
+    return count.count;
 }
 
-// --- CORE LOGIC ---
+function getCareerStats(userId) {
+    const songs = db.prepare('SELECT COUNT(*) as count FROM songs WHERE user_id = ?').get(userId);
+    const reviews = db.prepare('SELECT COUNT(*) as count FROM reviews WHERE user_id = ?').get(userId);
+    return { songs: songs.count, reviews: reviews.count };
+}
+
+function getSongStats(songId) { 
+    return db.prepare('SELECT upvotes, views, message_id, channel_id, user_id, description, artist_name, title, tags, url FROM songs WHERE id = ?').get(songId); 
+}
+
+function canUserVote(userId, songId, newPoints) {
+    if (newPoints < 0) return true; 
+    const record = db.prepare('SELECT SUM(amount) as total FROM votes WHERE voter_id = ? AND song_id = ? AND amount > 0').get(userId, songId);
+    const currentTotal = record.total || 0;
+    return (currentTotal + newPoints) <= 3;
+}
+
+function recordVote(userId, songId, amount) {
+    db.prepare('INSERT INTO votes (song_id, voter_id, type, timestamp, amount) VALUES (?, ?, ?, ?, ?)').run(songId, userId, 'VOTE', Date.now(), amount);
+}
+
+function modifyUpvotes(songId, amount) { db.prepare('UPDATE songs SET upvotes = upvotes + ? WHERE id = ?').run(amount, songId); }
+function incrementViews(songId) { db.prepare('UPDATE songs SET views = views + 1 WHERE id = ?').run(songId); }
+
+function spendCredits(userId, amount) {
+    const user = getUser(userId);
+    if (user.credits < amount) return false;
+    db.prepare('UPDATE users SET credits = credits - ? WHERE id = ?').run(amount, userId);
+    return true;
+}
+
 function addPoints(userId, amount = 2) {
     let user = getUser(userId);
     const today = new Date().toDateString();
@@ -94,19 +119,43 @@ function addPoints(userId, amount = 2) {
     return { earned: true, amount: amount };
 }
 
+function buildTrackEmbed(songData) {
+    const tags = JSON.parse(songData.tags);
+    const artist = songData.artist_name ? `**Artist:** ${songData.artist_name}\n` : '';
+    return new EmbedBuilder()
+        .setColor(0x0099FF)
+        .setTitle('🔥 Fresh Drop Alert')
+        .setDescription(`**User:** <@${songData.user_id}>\n${artist}**Genres:**\n${tags[0]} > ${tags[1]}\n${tags[2] ? `${tags[2]} > ${tags[3]}` : ''}\n\n**Description:**\n${songData.description}`)
+        .addFields({ name: 'Listen Here', value: songData.url })
+        .setFooter({ text: `Song ID: ${songData.id} | 🔥 Score: ${songData.upvotes || 0} | 👀 Views: ${songData.views || 0}` });
+}
+
+function generateSongListEmbed(targetUser, songs) {
+    const embed = new EmbedBuilder().setColor(0x00FFFF).setTitle(`💿 Discography: ${targetUser.username}`).setThumbnail(targetUser.displayAvatarURL());
+    if (songs.length === 0) { embed.setDescription("*This user hasn't dropped any tracks yet.*"); return embed; }
+    const songList = songs.map((s, i) => {
+        const title = s.title ? truncate(s.title, 25) : 'Untitled Track';
+        const channelId = s.channel_id || CHANNEL_LEGACY;
+        const msgLink = s.message_id ? `https://discord.com/channels/${process.env.GUILD_ID}/${channelId}/${s.message_id}` : s.url;
+        const tags = JSON.parse(s.tags);
+        return `${i+1}. **[${title}](${msgLink})**\n└ ${tags[1]} • 🔥 **${s.upvotes}**`;
+    }).join('\n\n');
+    embed.setDescription(songList);
+    embed.setFooter({ text: 'Click song title to jump to discussion.' });
+    return embed;
+}
+
 async function updatePublicEmbed(guild, songId) {
     const song = db.prepare('SELECT * FROM songs WHERE id = ?').get(songId);
     if (!song || !song.message_id) return;
     
-    // 1. Update Main Channel
     const channel = guild.channels.cache.get(song.channel_id || CHANNEL_LEGACY);
     if (channel) {
         try {
             const message = await channel.messages.fetch(song.message_id);
             if (message) await message.edit({ embeds: [buildTrackEmbed(song)] });
-        } catch (e) { console.error(`Embed Update Error ${songId}:`, e); }
+        } catch (e) {}
     }
-    // 2. Update Session Log
     const logChannel = guild.channels.cache.get(CHANNEL_SESSION_LOG);
     if (logChannel) {
         try {
@@ -117,45 +166,56 @@ async function updatePublicEmbed(guild, songId) {
     }
 }
 
+// --- LEADERBOARD ENGINE (5 BOARDS) ---
 async function updateLeaderboard(guild) {
     const channel = guild.channels.cache.get(CHANNEL_LEADERBOARD);
     if (!channel) return;
     const sevenDaysAgo = Date.now() - 604800000;
 
-    // Queries
+    // DATA HELPERS
     const getStats = () => ({
         totalS: db.prepare('SELECT COUNT(*) as c FROM songs').get().c,
         totalR: db.prepare('SELECT COUNT(*) as c FROM reviews').get().c,
         weekS: db.prepare('SELECT COUNT(*) as c FROM songs WHERE timestamp > ?').get(sevenDaysAgo).c,
         weekR: db.prepare('SELECT COUNT(*) as c FROM reviews WHERE timestamp > ?').get(sevenDaysAgo).c
     });
-    
     const getList = (query, mapFn) => db.prepare(query).all().map(mapFn).join('\n') || "No data.";
-    const songMap = (s, i) => `${getRankIcon(i)} ${s.artist_name ? `**${s.artist_name}** - ` : ''}[${truncate(s.title || 'Track', 20)}](${s.url}) • 🔥 **${s.upvotes || s.score}**`;
+    
+    // 3. Lifetime Tracks List
+    const songMap = (s, i) => {
+        const artist = s.artist_name ? `**${s.artist_name}**` : 'Unknown';
+        const displayTitle = s.title ? truncate(s.title, 20) : `Track ${s.id}`;
+        return `${getRankIcon(i)} ${artist} - [${displayTitle}](${s.url}) • 🔥 **${s.upvotes || s.score}**`;
+    };
 
-    // Embeds
+    // EMBEDS
     const s = getStats();
     const embeds = [
+        // 1. SERVER STATS
         new EmbedBuilder().setColor(0x2F3136).setTitle('📊 SERVER PULSE').addFields(
             { name: 'Total Songs', value: `**${s.totalS}**`, inline: true }, { name: 'Total Reviews', value: `**${s.totalR}**`, inline: true }, { name: '\u200B', value: '\u200B', inline: true },
             { name: 'Weekly Songs', value: `**${s.weekS}**`, inline: true }, { name: 'Weekly Reviews', value: `**${s.weekR}**`, inline: true }, { name: '\u200B', value: '\u200B', inline: true }
         ),
+        // 2. LIFETIME PEOPLE
         new EmbedBuilder().setColor(0xFFD700).setTitle('🏆 ALL-TIME HALL OF FAME').addFields(
             { name: '👑 Top Critics', value: getList('SELECT id, lifetime_points FROM users ORDER BY lifetime_points DESC LIMIT 10', (u,i) => `${getRankIcon(i)} <@${u.id}> • **${u.lifetime_points}**`), inline: true },
             { name: '🎨 Top Artists', value: getList('SELECT user_id, COUNT(*) as c FROM songs GROUP BY user_id ORDER BY c DESC LIMIT 10', (u,i) => `${getRankIcon(i)} <@${u.user_id}> • **${u.c}**`), inline: true }
         ),
+        // 3. LIFETIME TRACKS
         new EmbedBuilder().setColor(0xFFA500).setTitle('🔥 LIFETIME: TOP TRACKS').setDescription(getList('SELECT * FROM songs ORDER BY upvotes DESC LIMIT 10', songMap)),
+        
+        // 4. WEEKLY PEOPLE
         new EmbedBuilder().setColor(0x00FF00).setTitle('📅 WEEKLY: TOP MEMBERS').addFields(
             { name: '🚀 Top Critics', value: db.prepare(`SELECT user_id as id, COUNT(*) * 2 as score FROM reviews WHERE timestamp > ${sevenDaysAgo} GROUP BY user_id ORDER BY score DESC LIMIT 10`).all().map((u,i) => `${getRankIcon(i)} <@${u.id}> • **${u.score}**`).join('\n') || "No data.", inline: true },
             { name: '🎨 Top Artists', value: db.prepare(`SELECT user_id, COUNT(*) as c FROM songs WHERE timestamp > ${sevenDaysAgo} GROUP BY user_id ORDER BY c DESC LIMIT 10`).all().map((u,i) => `${getRankIcon(i)} <@${u.user_id}> • **${u.c}**`).join('\n') || "No data.", inline: true }
         ),
+        // 5. WEEKLY TRACKS
         new EmbedBuilder().setColor(0x00FFFF).setTitle('📈 WEEKLY: TRENDING TRACKS').setDescription(db.prepare(`SELECT song_id, SUM(amount) as score FROM votes WHERE timestamp > ${sevenDaysAgo} AND amount > 0 GROUP BY song_id ORDER BY score DESC LIMIT 10`).all().map((stat, i) => {
             const song = db.prepare('SELECT * FROM songs WHERE id = ?').get(stat.song_id);
             return song ? songMap({...song, score: stat.score}, i) : '';
         }).join('\n') || "No data.").setFooter({ text: `Updated: ${new Date().toLocaleTimeString()}` })
     ];
 
-    // Posting Loop
     const messages = await channel.messages.fetch({ limit: 10 });
     for (const embed of embeds) {
         const existing = messages.find(m => m.embeds[0]?.title === embed.data.title);
@@ -181,13 +241,24 @@ async function finalizeSubmission(interaction, draft) {
     draftSubmissions.delete(interaction.user.id);
 }
 
-// --- EVENTS ---
 client.once('ready', () => {
     console.log(`Logged in as ${client.user.tag}!`);
     setInterval(() => {
         const guild = client.guilds.cache.get(process.env.GUILD_ID);
         if (guild) updateLeaderboard(guild);
     }, 5 * 60 * 1000);
+    // Voice Payroll
+    setInterval(() => {
+        const guild = client.guilds.cache.get(process.env.GUILD_ID);
+        if (!guild) return;
+        const voiceChannel = guild.channels.cache.get(CHANNEL_VOICE_PARTY);
+        if (!voiceChannel || voiceChannel.members.size < 2) return; 
+        voiceChannel.members.forEach(member => {
+            if (!member.voice.selfDeaf && !member.voice.serverDeaf) {
+                addPoints(member.id, VOICE_PAYOUT);
+            }
+        });
+    }, 15 * 60 * 1000);
 });
 
 client.on('interactionCreate', async interaction => {
@@ -235,7 +306,6 @@ client.on('interactionCreate', async interaction => {
             }
         }
 
-        // Profile, Share, Top, Admin, Init commands (Condensed)
         if (interaction.commandName === 'profile' || interaction.commandName === 'share-profile') {
             const user = getUser(interaction.user.id);
             const stats = { songs: db.prepare('SELECT COUNT(*) as c FROM songs WHERE user_id = ?').get(user.id).c, reviews: db.prepare('SELECT COUNT(*) as c FROM reviews WHERE user_id = ?').get(user.id).c };
@@ -258,7 +328,27 @@ client.on('interactionCreate', async interaction => {
             db.prepare('DELETE FROM songs WHERE id = ?').run(songId);
             await interaction.reply({ content: `🗑️ **Terminated.** Song ID ${songId}.`, ephemeral: true });
         }
-        // Weekly Report, Init commands assumed present or not needed for this update.
+        if (interaction.commandName === 'init-leaderboard') {
+            if (!interaction.member.permissions.has('Administrator')) return interaction.reply({ content: "Admin only.", ephemeral: true });
+            await interaction.deferReply({ ephemeral: true });
+            await updateLeaderboard(interaction.guild);
+            await interaction.editReply({ content: "✅ 5-Board System Initialized." });
+        }
+        if (interaction.commandName === 'init-welcome') {
+             // (Keep your welcome logic here if needed, assuming standard)
+             if (!interaction.member.permissions.has('Administrator')) return interaction.reply({ content: "Admin only.", ephemeral: true });
+             const embed = new EmbedBuilder().setColor(0xFF00FF).setTitle('🤖 Welcome to the Future of Music').setDescription(`We are a community of AI music creators dedicated to honest feedback and growth.\n\n**COMMUNITY RULES:**\n1. **Respect Everyone:** No hate speech, harassment, or toxicity.\n2. **Give to Get:** You must review songs to earn credits.\n3. **Honesty:** Low-effort spam reviews will result in a ban.\n4. **No Spam:** Don't DM members with self-promotion.\n\n*By clicking below, you agree to these terms.*`).setImage('https://media.discordapp.net/attachments/123456789/123456789/banner.png');
+             const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('accept_tos').setLabel('✅ I Accept & Enter').setStyle(ButtonStyle.Success));
+             await interaction.channel.send({ embeds: [embed], components: [row] });
+             await interaction.reply({ content: "Gatekeeper initialized.", ephemeral: true });
+        }
+        // Weekly report command remains...
+        if (interaction.commandName === 'weekly-report') {
+             if (!interaction.member.permissions.has('Administrator')) return interaction.reply({ content: "Admin only.", ephemeral: true });
+             await interaction.deferReply({ ephemeral: true });
+             updateLeaderboard(interaction.guild);
+             await interaction.editReply({ content: "✅ Boards refreshed." });
+        }
     }
 
     if (interaction.isModalSubmit()) {
@@ -300,7 +390,6 @@ client.on('interactionCreate', async interaction => {
         const draft = draftSubmissions.get(interaction.user.id);
         if (!draft) return interaction.reply({ content: "Session expired.", ephemeral: true });
         
-        // Unified Step Handler
         const handleStep = async (step, selection) => {
             if (step === 'macro') {
                 draft.macro1 = selection;
@@ -337,7 +426,6 @@ client.on('interactionCreate', async interaction => {
         else if (interaction.customId === 'select_micro_2') handleStep('micro2', interaction.values[0]);
         
         if (interaction.customId === 'stage_select_genre') {
-             // DJ STAGE LOGIC RE-INSERTED
             const genre = interaction.values[0];
             const targetChannelId = CHANNEL_ROUTER[genre] || CHANNEL_LEGACY;
             const stmt = db.prepare('INSERT INTO songs (user_id, url, description, tags, timestamp, title, artist_name, channel_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
@@ -363,10 +451,9 @@ client.on('interactionCreate', async interaction => {
         const parts = interaction.customId.split('_');
         const action = parts[0];
 
-        if (action === 'back') { // Unified Back Logic
+        if (action === 'back') { 
             const step = parts.slice(2).join('_');
             const draft = draftSubmissions.get(interaction.user.id);
-            // Re-render previous step... (Logic condensed for brevity, assumes functionality matches original verbose blocks)
              if (step === 'macro_1') {
                 const options = Object.keys(taxonomy).map(m => new StringSelectMenuOptionBuilder().setLabel(m).setValue(m));
                 const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('select_macro_1').setPlaceholder('Select Primary Genre').addOptions(options));
@@ -390,7 +477,6 @@ client.on('interactionCreate', async interaction => {
             const pointsToAdd = parseInt(parts[1] === 'neg1' ? -1 : parts[1]);
             const cost = Math.abs(pointsToAdd); 
             
-            // Vote Cap Check
             const totalVotesRec = db.prepare('SELECT SUM(amount) as total FROM votes WHERE voter_id = ? AND song_id = ? AND amount > 0').get(interaction.user.id, songId);
             const currentTotal = totalVotesRec?.total || 0;
             if (pointsToAdd > 0 && (currentTotal + pointsToAdd) > 3) return interaction.reply({ content: `🛑 **Limit:** You can only give 3 upvotes per song.`, ephemeral: true });
@@ -401,9 +487,7 @@ client.on('interactionCreate', async interaction => {
                 const guild = client.guilds.cache.get(process.env.GUILD_ID);
                 await updatePublicEmbed(guild, songId);
                 const user = getUser(interaction.user.id);
-                // DM User
                 try { await interaction.user.send(`✅ **Vote Recorded!**\n💰 Remaining: ${user.credits}`); } catch(e){}
-                // Ack interaction
                 if (interaction.message.channel.type === ChannelType.DM) await interaction.update({ content: "Vote Recorded.", components: [] });
                 else await interaction.reply({content: "Vote Recorded.", ephemeral: true});
             } else {
@@ -417,12 +501,7 @@ client.on('interactionCreate', async interaction => {
             incrementViews(songId);
             await updatePublicEmbed(client.guilds.cache.get(process.env.GUILD_ID), songId);
             const link = interaction.message.embeds[0].fields[0].value;
-            const btn = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`review_submit_${songId}`).setLabel('⭐ Write Review').setStyle(ButtonStyle.Success)); // NOTE: Button triggers modal via intermediate handler or direct? 
-            // Correction: 'review' button opens modal. The ID needs to match the handler. 
-            // In previous code 'review_' triggered the modal logic.
-            // Let's fix the button ID to match the handler 'review'.
             const reviewBtn = new ButtonBuilder().setCustomId(`review_${songId}`).setLabel('⭐ Review & Earn').setStyle(ButtonStyle.Success);
-            
             try { await interaction.user.send({ content: `⏳ **Timer Started!**\nListen: ${link}\nClick below after 45s.`, components: [new ActionRowBuilder().addComponents(reviewBtn)] }); 
             await interaction.reply({ content: "📩 **Check DMs!**", ephemeral: true }); } catch(e) {
                 await interaction.reply({ content: `⏳ **Timer Started!**\nListen: ${link}\nClick below after 45s.`, components: [new ActionRowBuilder().addComponents(reviewBtn)], ephemeral: true });
@@ -437,6 +516,23 @@ client.on('interactionCreate', async interaction => {
              const modal = new ModalBuilder().setCustomId(`review_submit_${songId}`).setTitle('Write a Review');
              modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('review_text').setLabel('Feedback').setStyle(TextInputStyle.Paragraph).setRequired(true)));
              await interaction.showModal(modal);
+        }
+
+        if (action === 'accept') {
+            if (parts[1] === 'tos') {
+                const roleName = "Verified Member";
+                if (!interaction.guild) return interaction.reply({content: "Please accept TOS in the server channel.", ephemeral: true});
+                const role = interaction.guild.roles.cache.find(r => r.name === roleName);
+                if (!role) return interaction.reply({ content: `❌ **Configuration Error:** Role "${roleName}" not found.`, ephemeral: true });
+                if (interaction.member.roles.cache.has(role.id)) return interaction.reply({ content: "You are already verified! Go make some music.", ephemeral: true });
+                try { await interaction.member.roles.add(role); await interaction.reply({ content: "✅ **Access Granted.** Welcome to the community!", ephemeral: true }); } catch (err) { console.error(err); await interaction.reply({ content: "❌ Error: Bot Role must be higher than 'Verified Member'.", ephemeral: true }); }
+            }
+        }
+        if (action === 'report') {
+            await interaction.reply({ content: "✅ Report sent to moderators.", ephemeral: true });
+            const guild = client.guilds.cache.get(process.env.GUILD_ID);
+            const modChannel = guild.channels.cache.get(CHANNEL_MOD_QUEUE);
+            if (modChannel) modChannel.send(`⚠️ **Report:** Song ID ${parts[1]} reported by <@${interaction.user.id}>.`);
         }
     }
 });
