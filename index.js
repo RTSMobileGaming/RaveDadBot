@@ -43,6 +43,7 @@ const CHANNEL_ROUTER = {
 };
 
 const DAILY_SUBMISSION_LIMIT = 3; 
+const SUBMISSION_COST = 3; // NEW: Cost to Post (Requires ~1.5 reviews)
 const DAILY_POINT_CAP = 40; 
 const WALLET_CAP = 60;
 const VOICE_PAYOUT = 2; 
@@ -83,15 +84,12 @@ function isValidLink(url) {
 function getUser(userId) {
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
     if (!user) {
-        // Defaults: extra_submits will default to 0 via schema if omitted, or we can explicit set 0. 
-        // relying on schema default for new columns is safer if we add more later.
         db.prepare('INSERT INTO users (id, credits, lifetime_points, daily_points, last_active) VALUES (?, 10, 0, 0, ?)').run(userId, new Date().toDateString());
         return { id: userId, credits: 10, lifetime_points: 0, daily_points: 0, last_active: new Date().toDateString(), listen_start: 0, listen_song_id: 0, extra_submits: 0 };
     }
     return user;
 }
 
-// Updated Check Limit to include "Apology Slots" (extra_submits)
 function checkDailyLimit(userId) {
     const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
     const count = db.prepare('SELECT COUNT(*) as count FROM songs WHERE user_id = ? AND timestamp > ?').get(userId, oneDayAgo);
@@ -179,7 +177,7 @@ function generateSongListEmbed(targetUser, songs) {
     return embed;
 }
 
-// --- LEADERBOARD SYSTEM (5 BOARDS) ---
+// --- LEADERBOARD SYSTEM ---
 async function updateLeaderboard(guild) {
     const channel = guild.channels.cache.get(CHANNEL_LEADERBOARD);
     if (!channel) return;
@@ -207,7 +205,6 @@ async function updateLeaderboard(guild) {
     // 2. LIFETIME: PEOPLE
     const topCritics = db.prepare('SELECT id, lifetime_points FROM users ORDER BY lifetime_points DESC LIMIT 10').all();
     const criticList = topCritics.map((u, i) => `${getRankIcon(i)} <@${u.id}> • **${u.lifetime_points}**`).join('\n') || "No data.";
-    
     const topArtists = db.prepare('SELECT user_id, COUNT(*) as count FROM songs GROUP BY user_id ORDER BY count DESC LIMIT 10').all();
     const artistList = topArtists.map((u, i) => `${getRankIcon(i)} <@${u.user_id}> • **${u.count}**`).join('\n') || "No data.";
 
@@ -229,7 +226,6 @@ async function updateLeaderboard(guild) {
     // 4. WEEKLY: PEOPLE
     const weekCritics = db.prepare(`SELECT user_id as id, COUNT(*) * 2 as score FROM reviews WHERE timestamp > ? GROUP BY user_id ORDER BY score DESC LIMIT 10`).all(sevenDaysAgo);
     const weekCriticList = weekCritics.map((u, i) => `${getRankIcon(i)} <@${u.id}> • **${u.score}**`).join('\n') || "No data.";
-
     const weekArtists = db.prepare(`SELECT user_id, COUNT(*) as count FROM songs WHERE timestamp > ? GROUP BY user_id ORDER BY count DESC LIMIT 10`).all(sevenDaysAgo);
     const weekArtistList = weekArtists.map((u, i) => `${getRankIcon(i)} <@${u.user_id}> • **${u.count}**`).join('\n') || "No data.";
 
@@ -250,9 +246,8 @@ async function updateLeaderboard(guild) {
 
     const embedWeekTracks = new EmbedBuilder().setColor(0x00FF00).setTitle('📈 WEEKLY: TRACKS').setDescription(weekSongList).setFooter({ text: `Updated: ${new Date().toLocaleTimeString()}` });
 
-    // --- POSTING SEQUENTIAL MESSAGES ---
+    // --- POSTING ---
     const messages = await channel.messages.fetch({ limit: 10 });
-    
     const sendOrEdit = async (title, embed) => {
         const existing = messages.find(m => m.embeds[0]?.title === title);
         if (existing) await existing.edit({ embeds: [embed] });
@@ -314,6 +309,11 @@ async function updatePublicEmbed(guild, songId) {
 }
 
 async function finalizeSubmission(interaction, draft) {
+    // FINAL BALANCE CHECK (Redundant but safe)
+    if (!spendCredits(interaction.user.id, SUBMISSION_COST)) {
+         return interaction.update({ content: `❌ **Transaction Failed.** You need ${SUBMISSION_COST} Credits. Review tracks to earn more.`, components: [] });
+    }
+
     const finalTags = [draft.macro1, draft.micro1, draft.macro2, draft.micro2].filter(t => t && t !== 'SKIP');
     const targetChannelId = CHANNEL_ROUTER[draft.macro1] || CHANNEL_LEGACY; 
     const stmt = db.prepare('INSERT INTO songs (user_id, url, description, tags, timestamp, artist_name, channel_id, title) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
@@ -333,7 +333,10 @@ async function finalizeSubmission(interaction, draft) {
             await sentMsg.startThread({ name: `💬 Reviews: ${draft.artist_name ? draft.artist_name + ' - ' : ''}${truncate(draft.description, 15)}`, autoArchiveDuration: 60, reason: 'Song Review Thread', });
         } catch (e) { console.error("Could not create thread:", e); }
     }
-    await interaction.update({ content: `✅ **Submission Complete!** Posted to <#${targetChannelId}>.`, components: [] });
+    
+    // Get remaining balance for display
+    const user = getUser(interaction.user.id);
+    await interaction.update({ content: `✅ **Submission Complete!**\n💸 **Paid:** ${SUBMISSION_COST} Credits\n💰 **Remaining:** ${user.credits}\nPosted to <#${targetChannelId}>.`, components: [] });
     draftSubmissions.delete(interaction.user.id);
 }
 
@@ -397,6 +400,16 @@ client.on('interactionCreate', async interaction => {
         }
 
         if (interaction.commandName === 'submit') {
+            // 1. CHECK BANK ACCOUNT (The Pay-to-Play Gate)
+            const user = getUser(interaction.user.id);
+            if (user.credits < SUBMISSION_COST) {
+                return interaction.reply({ 
+                    content: `🛑 **Insufficient Credits!**\nIt costs **${SUBMISSION_COST} Credits** to submit a song.\nYou have: **${user.credits}**.\n\n💡 **How to earn:** Go review at least 2 songs from other members to earn credits!`, 
+                    ephemeral: true 
+                });
+            }
+
+            // 2. CHECK DAILY LIMIT
             const status = checkDailyLimit(interaction.user.id);
             if (status.count >= status.limit) {
                 const cooldownTimestamp = getSubmissionCooldown(interaction.user.id);
@@ -407,6 +420,7 @@ client.on('interactionCreate', async interaction => {
                     ephemeral: true 
                 });
             }
+
             const modal = new ModalBuilder().setCustomId('submission_modal').setTitle('Submit a Track');
             const linkInput = new TextInputBuilder().setCustomId('song_link').setLabel("Link").setStyle(TextInputStyle.Short).setRequired(true);
             const descInput = new TextInputBuilder().setCustomId('song_desc').setLabel("Description").setStyle(TextInputStyle.Paragraph).setMaxLength(100).setRequired(true);
@@ -429,7 +443,7 @@ client.on('interactionCreate', async interaction => {
                 const status = checkDailyLimit(interaction.user.id);
                 if (status.count >= status.limit) {
                     const cooldownTimestamp = getSubmissionCooldown(interaction.user.id);
-                    return interaction.reply({ content: `🛑 **Daily Limit Reached!** You cannot stage NEW songs until <t:${cooldownTimestamp}:R>. (Playing existing songs is free).`, ephemeral: true });
+                    return interaction.reply({ content: `🛑 **Daily Limit Reached!** You cannot stage NEW songs until <t:${cooldownTimestamp}:R>.`, ephemeral: true });
                 }
                 const modal = new ModalBuilder().setCustomId(`stage_modal`).setTitle('Quick Add to Stage');
                 draftSubmissions.set(interaction.user.id, { link: link, is_stage: true });
@@ -441,15 +455,25 @@ client.on('interactionCreate', async interaction => {
         }
         
         if (interaction.commandName === 'profile') {
-            const user = getUser(interaction.user.id);
-            const stats = getCareerStats(interaction.user.id);
+            // MOD TOOL LOGIC: Check if target user is provided
+            const targetUser = interaction.options.getUser('user') || interaction.user;
+            
+            // Allow checking others IF: You are Admin OR You are checking yourself
+            const isAdmin = interaction.member.permissions.has('Administrator');
+            if (targetUser.id !== interaction.user.id && !isAdmin) {
+                 return interaction.reply({ content: "❌ Only Admins can inspect other users' finances.", ephemeral: true });
+            }
+
+            const user = getUser(targetUser.id);
+            const stats = getCareerStats(targetUser.id);
             const today = new Date().toDateString();
             const displayDaily = (user.last_active === today) ? user.daily_points : 0;
-            const subStatus = checkDailyLimit(interaction.user.id);
-            const cooldownTimestamp = getSubmissionCooldown(interaction.user.id);
-            const embed = generateProfileEmbed(user, stats, displayDaily, subStatus, cooldownTimestamp, interaction.user.displayAvatarURL(), interaction.user.username);
+            const subStatus = checkDailyLimit(targetUser.id);
+            const cooldownTimestamp = getSubmissionCooldown(targetUser.id);
+            const embed = generateProfileEmbed(user, stats, displayDaily, subStatus, cooldownTimestamp, targetUser.displayAvatarURL(), targetUser.username);
             await interaction.reply({ embeds: [embed], ephemeral: true });
         }
+
         if (interaction.commandName === 'share-profile') {
             const user = getUser(interaction.user.id);
             const stats = getCareerStats(interaction.user.id);
@@ -461,6 +485,7 @@ client.on('interactionCreate', async interaction => {
             await interaction.reply({ content: "📢 **Flexing Stats!**", embeds: [embed], ephemeral: false });
         }
 
+        // UPDATED PROFILE EMBED WITH LEECH RATIO
         function generateProfileEmbed(user, stats, displayDaily, subStatus, cooldownTimestamp, avatarUrl, username) {
             let unlockStatus = "✅ Ready to Submit";
             if (subStatus.count >= subStatus.limit) {
@@ -468,14 +493,30 @@ client.on('interactionCreate', async interaction => {
             } else {
                 unlockStatus = `✅ Available (${subStatus.limit - subStatus.count} slots left)`;
             }
+
+            // Ratio Logic
+            let ratio = 0;
+            if (stats.songs > 0) {
+                ratio = (stats.reviews / stats.songs).toFixed(1);
+            } else if (stats.reviews > 0) {
+                ratio = "∞"; // Infinite generosity
+            }
+
+            let ratioDisplay = `${ratio}`;
+            if (ratio === "∞" || ratio >= 1.0) ratioDisplay = `🟢 ${ratio} (Contributor)`;
+            else if (ratio > 0) ratioDisplay = `🔴 ${ratio} (Leech Warning)`;
+            else ratioDisplay = `🔴 0.0 (Leech)`;
+
             return new EmbedBuilder()
                 .setColor(0x9b59b6)
                 .setTitle(`👤 Agent Profile: ${username}`)
                 .addFields(
                     { name: '💰 Credits', value: `**${user.credits}** / ${WALLET_CAP}`, inline: true },
                     { name: '🏆 Rank', value: `**${user.lifetime_points}** Lifetime Pts`, inline: true },
+                    { name: '⚖️ Ratio', value: `**${ratioDisplay}** (Reviews/Songs)`, inline: true },
+                    { name: '📊 Career Stats', value: `🎵 **${stats.songs}** Songs\n📝 **${stats.reviews}** Reviews`, inline: true },
                     { name: '📅 Daily Cap', value: `${displayDaily} / ${DAILY_POINT_CAP} pts`, inline: true },
-                    { name: '📊 Career Stats', value: `🎵 **${stats.songs}** Songs\n📝 **${stats.reviews}** Reviews`, inline: false },
+                    { name: '\u200B', value: '\u200B', inline: true }, // spacer
                     { name: '🔓 Submission Status', value: unlockStatus, inline: false }
                 )
                 .setThumbnail(avatarUrl);
@@ -521,6 +562,89 @@ client.on('interactionCreate', async interaction => {
     }
 
     // --- MODAL, MENU, BUTTON HANDLERS ---
+    if (interaction.isStringSelectMenu()) {
+        const draft = draftSubmissions.get(interaction.user.id);
+        if (!draft) return interaction.reply({ content: "❌ **Session Expired.** The bot may have restarted. Please run `/submit` again.", ephemeral: true });
+
+        if (interaction.customId === 'stage_select_genre') {
+            const genre = interaction.values[0];
+            const targetChannelId = CHANNEL_ROUTER[genre] || CHANNEL_LEGACY;
+            const stmt = db.prepare('INSERT INTO songs (user_id, url, description, tags, timestamp, title, artist_name, channel_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+            const tags = JSON.stringify([genre, "Live Session"]);
+            
+            const info = stmt.run(interaction.user.id, draft.link, "Played Live on Stage", tags, Date.now(), draft.title, draft.artist_name, targetChannelId);
+            const songId = info.lastInsertRowid;
+            
+            const publicChannel = client.guilds.cache.get(process.env.GUILD_ID).channels.cache.get(targetChannelId);
+            if (publicChannel) {
+                const embed = new EmbedBuilder().setColor(0x0099FF).setTitle('🔥 Fresh Drop Alert').setDescription(`**User:** <@${interaction.user.id}>\n**Artist:** ${draft.artist_name}\n**Genres:**\n${genre} > Live Session\n\n**Description:**\nPlayed Live on Stage`).addFields({ name: 'Listen Here', value: draft.link }).setFooter({ text: `Song ID: ${songId} | 🔥 Score: 0 | 👀 Views: 0` });
+                const listenBtn = new ButtonBuilder().setCustomId(`listen_${songId}`).setLabel('🎧 Start Listening').setStyle(ButtonStyle.Primary);
+                const reportBtn = new ButtonBuilder().setCustomId(`report_${songId}`).setLabel('⚠️ Report').setStyle(ButtonStyle.Danger);
+                const msg = await publicChannel.send({ embeds: [embed], components: [new ActionRowBuilder().addComponents(listenBtn, reportBtn)] });
+                
+                db.prepare('UPDATE songs SET message_id = ? WHERE id = ?').run(msg.id, songId);
+                await msg.startThread({ name: `💬 Reviews: ${draft.title}`, autoArchiveDuration: 60 });
+            }
+            
+            const logChannel = client.guilds.cache.get(process.env.GUILD_ID).channels.cache.get(CHANNEL_SESSION_LOG);
+            const embed = new EmbedBuilder().setColor(0xFF00FF).setTitle('🔴 NOW PLAYING').setDescription(`**${draft.title}** by ${draft.artist_name}`).addFields({ name: 'Listen', value: draft.link }).setFooter({ text: `ID: ${songId}` });
+            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`vote_1_${songId}`).setLabel('🔥 Banger (+1)').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId(`scribe_${songId}`).setLabel('📝 Scribe Note').setStyle(ButtonStyle.Secondary));
+            await logChannel.send({ embeds: [embed], components: [row] });
+            
+            await interaction.update({ content: "✅ On Stage! Posted to Session Log AND Public Channel.", components: [] });
+        }
+
+        if (interaction.customId === 'select_macro_1') {
+            draft.macro1 = interaction.values[0];
+            draftSubmissions.set(interaction.user.id, draft);
+            
+            const rawOptions = taxonomy[draft.macro1] || [];
+            const uniqueOptions = [...new Set(rawOptions)]
+                .filter(s => typeof s === 'string' && s.length > 0)
+                .slice(0, 25);
+
+            if (uniqueOptions.length === 0) {
+                 return interaction.update({ content: `❌ **Configuration Error:** No sub-genres found for ${draft.macro1}. Check taxonomy.json.`, components: [] });
+            }
+
+            const options = uniqueOptions.map(s => new StringSelectMenuOptionBuilder().setLabel(s).setValue(s));
+            const menuRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('select_micro_1').setPlaceholder(`Select Style`).addOptions(options));
+            const btnRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('back_to_macro_1').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary));
+            await interaction.update({ content: `**Step 2/4:** Select specific style for ${draft.macro1}`, components: [menuRow, btnRow] });
+        }
+        else if (interaction.customId === 'select_micro_1') {
+            draft.micro1 = interaction.values[0];
+            draftSubmissions.set(interaction.user.id, draft);
+            const macroOptions = Object.keys(taxonomy).map(m => new StringSelectMenuOptionBuilder().setLabel(m).setValue(m)).slice(0, 24); 
+            macroOptions.unshift(new StringSelectMenuOptionBuilder().setLabel("🚫 No Secondary Genre (Skip)").setValue("SKIP"));
+            const menuRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('select_macro_2').setPlaceholder('Select Secondary Category').addOptions(macroOptions));
+            const btnRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('back_to_micro_1').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary));
+            await interaction.update({ content: `**Step 3/4:** Select a Secondary Genre (or Skip)`, components: [menuRow, btnRow] });
+        }
+        else if (interaction.customId === 'select_macro_2') {
+            if (interaction.values[0] === 'SKIP') {
+                draft.macro2 = 'SKIP';
+                return finalizeSubmission(interaction, draft);
+            }
+            draft.macro2 = interaction.values[0];
+            draftSubmissions.set(interaction.user.id, draft);
+            
+            const rawOptions = taxonomy[draft.macro2] || [];
+            const uniqueOptions = [...new Set(rawOptions)]
+                .filter(s => typeof s === 'string' && s.length > 0)
+                .slice(0, 25);
+
+            const options = uniqueOptions.map(s => new StringSelectMenuOptionBuilder().setLabel(s).setValue(s));
+            const menuRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('select_micro_2').setPlaceholder(`Select Style`).addOptions(options));
+            const btnRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('back_to_macro_2').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary));
+            await interaction.update({ content: `**Step 4/4:** Select specific style for ${draft.macro2}`, components: [menuRow, btnRow] });
+        }
+        else if (interaction.customId === 'select_micro_2') {
+            draft.micro2 = interaction.values[0];
+            return finalizeSubmission(interaction, draft);
+        }
+    }
+
     if (interaction.isModalSubmit()) {
         if (interaction.customId === 'submission_modal') {
             const link = interaction.fields.getTextInputValue('song_link');
@@ -599,79 +723,6 @@ client.on('interactionCreate', async interaction => {
         }
     }
 
-    if (interaction.isStringSelectMenu()) {
-        const draft = draftSubmissions.get(interaction.user.id);
-        if (!draft) return interaction.reply({ content: "Session expired.", ephemeral: true });
-
-        // --- STAGE LOGIC (Cross-Posting) ---
-        if (interaction.customId === 'stage_select_genre') {
-            const genre = interaction.values[0];
-            const targetChannelId = CHANNEL_ROUTER[genre] || CHANNEL_LEGACY;
-            const stmt = db.prepare('INSERT INTO songs (user_id, url, description, tags, timestamp, title, artist_name, channel_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-            const tags = JSON.stringify([genre, "Live Session"]);
-            
-            // 1. Insert Song into DB
-            const info = stmt.run(interaction.user.id, draft.link, "Played Live on Stage", tags, Date.now(), draft.title, draft.artist_name, targetChannelId);
-            const songId = info.lastInsertRowid;
-            
-            // 2. Post to PUBLIC GENRE CHANNEL (The Fix)
-            const publicChannel = client.guilds.cache.get(process.env.GUILD_ID).channels.cache.get(targetChannelId);
-            if (publicChannel) {
-                const embed = new EmbedBuilder().setColor(0x0099FF).setTitle('🔥 Fresh Drop Alert').setDescription(`**User:** <@${interaction.user.id}>\n**Artist:** ${draft.artist_name}\n**Genres:**\n${genre} > Live Session\n\n**Description:**\nPlayed Live on Stage`).addFields({ name: 'Listen Here', value: draft.link }).setFooter({ text: `Song ID: ${songId} | 🔥 Score: 0 | 👀 Views: 0` });
-                const listenBtn = new ButtonBuilder().setCustomId(`listen_${songId}`).setLabel('🎧 Start Listening').setStyle(ButtonStyle.Primary);
-                const reportBtn = new ButtonBuilder().setCustomId(`report_${songId}`).setLabel('⚠️ Report').setStyle(ButtonStyle.Danger);
-                const msg = await publicChannel.send({ embeds: [embed], components: [new ActionRowBuilder().addComponents(listenBtn, reportBtn)] });
-                
-                // Link DB record to this public message so the Public Embed Updater works later
-                db.prepare('UPDATE songs SET message_id = ? WHERE id = ?').run(msg.id, songId);
-                await msg.startThread({ name: `💬 Reviews: ${draft.title}`, autoArchiveDuration: 60 });
-            }
-            
-            // 3. Post to SESSION LOG
-            const logChannel = client.guilds.cache.get(process.env.GUILD_ID).channels.cache.get(CHANNEL_SESSION_LOG);
-            const embed = new EmbedBuilder().setColor(0xFF00FF).setTitle('🔴 NOW PLAYING').setDescription(`**${draft.title}** by ${draft.artist_name}`).addFields({ name: 'Listen', value: draft.link }).setFooter({ text: `ID: ${songId}` });
-            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`vote_1_${songId}`).setLabel('🔥 Banger (+1)').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId(`scribe_${songId}`).setLabel('📝 Scribe Note').setStyle(ButtonStyle.Secondary));
-            await logChannel.send({ embeds: [embed], components: [row] });
-            
-            await interaction.update({ content: "✅ On Stage! Posted to Session Log AND Public Channel.", components: [] });
-        }
-
-        // STANDARD SUBMIT MENUS
-        if (interaction.customId === 'select_macro_1') {
-            draft.macro1 = interaction.values[0];
-            draftSubmissions.set(interaction.user.id, draft);
-            const options = taxonomy[draft.macro1].map(s => new StringSelectMenuOptionBuilder().setLabel(s).setValue(s));
-            const menuRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('select_micro_1').setPlaceholder(`Select Style`).addOptions(options));
-            const btnRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('back_to_macro_1').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary));
-            await interaction.update({ content: `**Step 2/4:** Select specific style for ${draft.macro1}`, components: [menuRow, btnRow] });
-        }
-        else if (interaction.customId === 'select_micro_1') {
-            draft.micro1 = interaction.values[0];
-            draftSubmissions.set(interaction.user.id, draft);
-            const macroOptions = Object.keys(taxonomy).map(m => new StringSelectMenuOptionBuilder().setLabel(m).setValue(m));
-            macroOptions.unshift(new StringSelectMenuOptionBuilder().setLabel("🚫 No Secondary Genre (Skip)").setValue("SKIP"));
-            const menuRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('select_macro_2').setPlaceholder('Select Secondary Category').addOptions(macroOptions));
-            const btnRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('back_to_micro_1').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary));
-            await interaction.update({ content: `**Step 3/4:** Select a Secondary Genre (or Skip)`, components: [menuRow, btnRow] });
-        }
-        else if (interaction.customId === 'select_macro_2') {
-            if (interaction.values[0] === 'SKIP') {
-                draft.macro2 = 'SKIP';
-                return finalizeSubmission(interaction, draft);
-            }
-            draft.macro2 = interaction.values[0];
-            draftSubmissions.set(interaction.user.id, draft);
-            const options = taxonomy[draft.macro2].map(s => new StringSelectMenuOptionBuilder().setLabel(s).setValue(s));
-            const menuRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('select_micro_2').setPlaceholder(`Select Style`).addOptions(options));
-            const btnRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('back_to_macro_2').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary));
-            await interaction.update({ content: `**Step 4/4:** Select specific style for ${draft.macro2}`, components: [menuRow, btnRow] });
-        }
-        else if (interaction.customId === 'select_micro_2') {
-            draft.micro2 = interaction.values[0];
-            return finalizeSubmission(interaction, draft);
-        }
-    }
-
     if (interaction.isButton()) {
         const parts = interaction.customId.split('_');
         const action = parts[0];
@@ -687,7 +738,8 @@ client.on('interactionCreate', async interaction => {
             }
             else if (step === 'micro_1') {
                 const subGenres = taxonomy[draft.macro1];
-                const options = subGenres.map(s => new StringSelectMenuOptionBuilder().setLabel(s).setValue(s));
+                const uniqueOptions = [...new Set(subGenres)].slice(0, 25);
+                const options = uniqueOptions.map(s => new StringSelectMenuOptionBuilder().setLabel(s).setValue(s));
                 const menuRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('select_micro_1').setPlaceholder(`Select Style`).addOptions(options));
                 const btnRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('back_to_macro_1').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary));
                 await interaction.update({ content: `**Step 2/4:** Select specific style for ${draft.macro1}`, components: [menuRow, btnRow] });
@@ -714,9 +766,7 @@ client.on('interactionCreate', async interaction => {
 
         if (action === 'listen') {
             const songId = parts[1];
-            // NEW TIMER LOGIC: STORE IN DB
             db.prepare('UPDATE users SET listen_start = ?, listen_song_id = ? WHERE id = ?').run(Date.now(), songId, interaction.user.id);
-            
             incrementViews(songId);
             const guild = client.guilds.cache.get(process.env.GUILD_ID);
             await updatePublicEmbed(guild, songId);
@@ -739,7 +789,6 @@ client.on('interactionCreate', async interaction => {
             const check = db.prepare('SELECT 1 FROM reviews WHERE user_id = ? AND song_id = ?').get(interaction.user.id, songId);
             if (check) return interaction.reply({ content: "❌ **You have already reviewed this track.**", ephemeral: true });
 
-            // NEW TIMER LOGIC: CHECK DB
             const user = getUser(interaction.user.id);
             const startTime = user.listen_start;
             

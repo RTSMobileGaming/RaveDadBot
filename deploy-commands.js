@@ -3,7 +3,10 @@ const { REST, Routes, SlashCommandBuilder } = require('discord.js');
 
 const commands = [
     new SlashCommandBuilder().setName('submit').setDescription('Submit a song to the community'),
-    new SlashCommandBuilder().setName('profile').setDescription('Check your stats privately'),
+    new SlashCommandBuilder()
+        .setName('profile')
+        .setDescription('Check stats and financial status')
+        .addUserOption(option => option.setName('user').setDescription('Admin/Mod Only: Look up another user')),
     new SlashCommandBuilder().setName('share-profile').setDescription('Post your stats publicly'),
     new SlashCommandBuilder().setName('weekly-report').setDescription('Admin Only: Generate weekly report'),
     
