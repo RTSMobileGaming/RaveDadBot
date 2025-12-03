@@ -23,7 +23,6 @@ const CHANNEL_LEGACY = '1441526523659026626';
 const CHANNEL_VOICE_PARTY = '1441790056770572398';
 const CHANNEL_SESSION_LOG = '1444069047816687679';
 
-// Using Hardcoded IDs as requested for stability
 const CHANNEL_ROUTER = {
     'EDM: House & Techno': '1442168642388230164',
     'EDM: Trance & Synth': '1442168642388230164',
@@ -46,8 +45,6 @@ const DAILY_SUBMISSION_LIMIT = 3;
 const SUBMISSION_COST = 3; 
 const DAILY_POINT_CAP = 40; 
 const WALLET_CAP = 60;
-
-// Note: Removed VC_PAYOUT constant as passive earning is disabled.
 
 const ALLOWED_DOMAINS = ['youtube.com', 'youtu.be', 'music.youtube.com', 'spotify.com', 'suno.com', 'suno.ai', 'soundcloud.com', 'udio.com', 'sonauto.ai', 'tunee.ai', 'mureka.ai'];
 const BACKUP_INTERVAL = 24 * 60 * 60 * 1000; 
@@ -73,13 +70,11 @@ addColumn('votes', 'amount', 'INTEGER DEFAULT 1');
 addColumn('users', 'listen_start', 'INTEGER DEFAULT 0');
 addColumn('users', 'listen_song_id', 'INTEGER DEFAULT 0');
 addColumn('users', 'extra_submits', 'INTEGER DEFAULT 0');
-// NEW: Suspension System
 addColumn('users', 'suspended_until', 'INTEGER DEFAULT 0');
 addColumn('users', 'suspend_reason', 'TEXT');
 
 // --- HELPERS ---
 function isModerator(member) {
-    // Allows Admins OR anyone with "Kick Members" (standard Mod perm)
     return member.permissions.has('Administrator') || member.permissions.has('KickMembers');
 }
 
@@ -105,18 +100,14 @@ function getUser(userId) {
 function checkDailyLimit(userId) {
     const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
     const count = db.prepare('SELECT COUNT(*) as count FROM songs WHERE user_id = ? AND timestamp > ?').get(userId, oneDayAgo);
-    
-    // Check for VIP status/Apology Buffs
     const user = getUser(userId);
     const bonus = user.extra_submits || 0;
-    
     return { count: count.count, limit: DAILY_SUBMISSION_LIMIT + bonus };
 }
 
 function getSubmissionCooldown(userId) {
     const user = getUser(userId);
     const limit = DAILY_SUBMISSION_LIMIT + (user.extra_submits || 0);
-    
     const songs = db.prepare('SELECT timestamp FROM songs WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?').all(userId, limit);
     if (songs.length < limit) return null; 
     const oldestTimestamp = songs[songs.length - 1].timestamp;
@@ -134,18 +125,15 @@ function getCareerStats(userId) {
 function addPoints(userId, amount = 2) {
     let user = getUser(userId);
     const today = new Date().toDateString();
-
     if (user.last_active !== today) {
         db.prepare('UPDATE users SET daily_points = 0, last_active = ? WHERE id = ?').run(today, userId);
         user.daily_points = 0; 
     }
-
     if (user.daily_points >= DAILY_POINT_CAP) return { earned: false, reason: "daily_cap" }; 
     if (user.credits >= WALLET_CAP) { 
         db.prepare('UPDATE users SET lifetime_points = lifetime_points + ?, daily_points = daily_points + ?, last_active = ? WHERE id = ?').run(amount, amount, today, userId);
         return { earned: false, reason: "wallet_cap" };
     }
-
     db.prepare('UPDATE users SET credits = credits + ?, lifetime_points = lifetime_points + ?, daily_points = daily_points + ?, last_active = ? WHERE id = ?').run(amount, amount, amount, today, userId);
     return { earned: true, amount: amount };
 }
@@ -302,7 +290,6 @@ client.on('interactionCreate', async interaction => {
         commandCooldowns.set(userId, now);
 
         if (interaction.commandName === 'admin-delete') {
-            // Updated Permission Check
             if (!isModerator(interaction.member)) return interaction.reply({ content: "Mods only.", ephemeral: true });
             const songId = interaction.options.getInteger('song_id');
             const song = getSongStats(songId);
@@ -337,13 +324,49 @@ client.on('interactionCreate', async interaction => {
             await interaction.reply({ content: `✅ **Limit Updated.** ${target.username} now has +${slots} extra daily submissions.`, ephemeral: true });
         }
 
+        // NEW: Leech List
+        if (interaction.commandName === 'leech-list') {
+            if (!isModerator(interaction.member)) return interaction.reply({ content: "Mods only.", ephemeral: true });
+            const limit = Math.min(interaction.options.getInteger('limit'), 25);
+            
+            // CTE Query to calculate stats on the fly
+            const leeches = db.prepare(`
+                WITH Stats AS (
+                    SELECT 
+                        user_id, 
+                        COUNT(*) as songs,
+                        (SELECT COUNT(*) FROM reviews WHERE user_id = songs.user_id) as reviews
+                    FROM songs 
+                    GROUP BY user_id
+                )
+                SELECT *, (reviews * 1.0 / songs) as ratio 
+                FROM Stats 
+                ORDER BY ratio ASC, songs DESC 
+                LIMIT ?
+            `).all(limit);
+
+            if (leeches.length === 0) return interaction.reply({ content: "No data found.", ephemeral: true });
+
+            const lines = leeches.map((l, i) => {
+                const ratio = l.ratio ? l.ratio.toFixed(2) : "0.00";
+                return `${i+1}. <@${l.user_id}> • Ratio: **${ratio}** (🎵 ${l.songs} | 📝 ${l.reviews})`;
+            });
+
+            const embed = new EmbedBuilder()
+                .setColor(0xFF0000)
+                .setTitle(`🧛 Top ${limit} Leeches`)
+                .setDescription(lines.join('\n'))
+                .setFooter({ text: 'Sorted by Lowest Ratio -> Highest Song Count' });
+
+            await interaction.reply({ embeds: [embed], ephemeral: true });
+        }
+
         if (interaction.commandName === 'weekly-report') {
             if (!isModerator(interaction.member)) return interaction.reply({ content: "Mods only.", ephemeral: true });
             updateLeaderboard(interaction.guild);
             await interaction.reply({ content: "✅ Boards refreshed.", ephemeral: true });
         }
 
-        // NEW: Suspend Command
         if (interaction.commandName === 'suspend') {
             if (!isModerator(interaction.member)) return interaction.reply({ content: "Mods only.", ephemeral: true });
             const target = interaction.options.getUser('user');
@@ -391,7 +414,6 @@ client.on('interactionCreate', async interaction => {
 
             const modal = new ModalBuilder().setCustomId('submission_modal').setTitle('Submit a Track');
             const linkInput = new TextInputBuilder().setCustomId('song_link').setLabel("Link").setStyle(TextInputStyle.Short).setRequired(true);
-            // NEW: TITLE FIELD
             const titleInput = new TextInputBuilder().setCustomId('song_title').setLabel("Song Title").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(50);
             const artistInput = new TextInputBuilder().setCustomId('artist_name').setLabel("Artist/Band Name (Optional)").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(50);
             const descInput = new TextInputBuilder().setCustomId('song_desc').setLabel("Description").setStyle(TextInputStyle.Paragraph).setMaxLength(100).setRequired(true);
@@ -401,7 +423,6 @@ client.on('interactionCreate', async interaction => {
         }
 
         if (interaction.commandName === 'stage') {
-            // ... (Stage logic same as previous, just check validity)
             const link = interaction.options.getString('link');
             if (!isValidLink(link)) return interaction.reply({ content: "❌ Invalid Link.", ephemeral: true });
             const existing = db.prepare('SELECT * FROM songs WHERE url = ?').get(link);
@@ -428,8 +449,6 @@ client.on('interactionCreate', async interaction => {
         
         if (interaction.commandName === 'profile') {
             const targetUser = interaction.options.getUser('user') || interaction.user;
-            
-            // PERMISSION CHECK UPDATED
             const isSelf = targetUser.id === interaction.user.id;
             const hasPower = isModerator(interaction.member);
             if (!isSelf && !hasPower) {
@@ -494,9 +513,7 @@ client.on('interactionCreate', async interaction => {
                 .setThumbnail(avatarUrl);
         }
 
-        // ... (Keep existing commands: top, init-leaderboard, init-welcome, songs, share-songs) ...
         if (interaction.commandName === 'top') {
-             // same as before...
              const genre = interaction.options.getString('genre');
              const tracks = db.prepare("SELECT * FROM songs WHERE tags LIKE ? ORDER BY upvotes DESC LIMIT 10").all(`%${genre}%`);
              if (tracks.length === 0) return interaction.reply({ content: `No tracks found for **${genre}** yet.`, ephemeral: true });
@@ -540,9 +557,6 @@ client.on('interactionCreate', async interaction => {
         const draft = draftSubmissions.get(interaction.user.id);
         if (!draft) return interaction.reply({ content: "❌ **Session Expired.** The bot may have restarted. Please run `/submit` again.", ephemeral: true });
 
-        // ... (Keep existing Stage Logic, Macro1, Micro1, Macro2, Micro2 logic from previous patch)
-        // I will re-paste the Stage Logic here to ensure it's included, standard Select logic is assumed identical to Patch 2.2
-        
         if (interaction.customId === 'stage_select_genre') {
              const genre = interaction.values[0];
              const targetChannelId = CHANNEL_ROUTER[genre] || CHANNEL_LEGACY;
@@ -566,7 +580,6 @@ client.on('interactionCreate', async interaction => {
              await interaction.update({ content: "✅ On Stage! Posted to Session Log AND Public Channel.", components: [] });
         }
 
-        // Standard Menus (Abbreviated to avoid character limits, use previous logic for Selects)
         if (interaction.customId === 'select_macro_1') {
              draft.macro1 = interaction.values[0];
              draftSubmissions.set(interaction.user.id, draft);
@@ -608,7 +621,7 @@ client.on('interactionCreate', async interaction => {
         if (interaction.customId === 'submission_modal') {
             const link = interaction.fields.getTextInputValue('song_link');
             if (!isValidLink(link)) return interaction.reply({ content: "❌ Invalid Link.", ephemeral: true });
-            const title = interaction.fields.getTextInputValue('song_title'); // Captured
+            const title = interaction.fields.getTextInputValue('song_title'); 
             const desc = interaction.fields.getTextInputValue('song_desc');
             const artist = interaction.fields.getTextInputValue('artist_name'); 
             draftSubmissions.set(interaction.user.id, { link, description: desc, artist_name: artist, title: title });
@@ -629,15 +642,11 @@ client.on('interactionCreate', async interaction => {
             await interaction.reply({ content: `Select Genre for the Stage:`, components: [row], ephemeral: true });
         }
 
-        // NEW: Scribe Note = POINTS EARNED
         if (interaction.customId.startsWith('scribe_submit_')) {
             const songId = interaction.customId.split('_')[2];
             const note = interaction.fields.getTextInputValue('scribe_note');
-            
-            // EARN POINTS HERE INSTEAD OF VC LOOP
-            const reward = 2; // Credits for scribing
+            const reward = 2; 
             const result = addPoints(interaction.user.id, reward);
-            
             const song = getSongStats(songId);
             const targetChannelId = song.channel_id || CHANNEL_LEGACY;
             const channel = client.guilds.cache.get(process.env.GUILD_ID).channels.cache.get(targetChannelId);
@@ -647,14 +656,12 @@ client.on('interactionCreate', async interaction => {
                     let thread = message.thread;
                     if (!thread) { thread = await message.startThread({ name: `💬 Reviews: ${song.title || 'Track'}`, autoArchiveDuration: 60 }); }
                     await thread.send(`🎙️ **Live Session Note** by <@${interaction.user.id}> for <@${song.user_id}>:\n"${note}"`);
-                    
                     let msg = result.earned ? `✅ **Note Scribed!** (+${reward} Credits)` : `✅ **Note Scribed!** (Daily Cap Reached)`;
                     await interaction.reply({ content: msg, ephemeral: true });
                 }
             }
         }
         
-        // ... (review_submit logic remains same as Patch 2.2) ...
         if (interaction.customId.startsWith('review_submit_')) {
              const songId = interaction.customId.split('_')[2];
              const reviewText = interaction.fields.getTextInputValue('review_text');
@@ -687,14 +694,11 @@ client.on('interactionCreate', async interaction => {
         }
     }
 
-    // ... (Button handlers remain same as Patch 2.2) ...
     if (interaction.isButton()) {
-        // Just ensuring back buttons, accept, listen, review, vote, report, scribe are here.
-        // Copy logic from Patch 2.2, no changes to these buttons except 'scribe' invokes the modal above.
         const parts = interaction.customId.split('_');
         const action = parts[0];
 
-        if (action === 'back') { /* ...Same as Patch 2.2... */ 
+        if (action === 'back') {
              const draft = draftSubmissions.get(interaction.user.id);
              if (!draft) return interaction.reply({ content: "Session expired.", ephemeral: true });
              const step = parts.slice(2).join('_');
@@ -703,7 +707,6 @@ client.on('interactionCreate', async interaction => {
                  const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('select_macro_1').setPlaceholder('Select Primary Category').addOptions(macroOptions));
                  await interaction.update({ content: `**Step 1/4:** Select Primary Genre`, components: [row] });
              }
-             // ... include micro_1 and macro_2 back logic ...
              else if (step === 'micro_1') {
                  const subGenres = taxonomy[draft.macro1] || [];
                  const options = [...new Set(subGenres)].slice(0, 25).map(s => new StringSelectMenuOptionBuilder().setLabel(s).setValue(s));
@@ -719,7 +722,8 @@ client.on('interactionCreate', async interaction => {
                  await interaction.update({ content: `**Step 3/4:** Select a Secondary Genre (or Skip)`, components: [menuRow, btnRow] });
              }
         }
-        if (action === 'accept') { /* ...Same as Patch 2.2... */ 
+
+        if (action === 'accept') {
              if (parts[1] === 'tos') {
                  const roleName = "Verified Member";
                  if (!interaction.guild) return interaction.reply({content: "Please accept TOS in the server channel.", ephemeral: true});
@@ -729,7 +733,8 @@ client.on('interactionCreate', async interaction => {
                  try { await interaction.member.roles.add(role); await interaction.reply({ content: "✅ **Access Granted.** Welcome to the community!", ephemeral: true }); } catch (err) { console.error(err); await interaction.reply({ content: "❌ Error: Bot Role must be higher than 'Verified Member'.", ephemeral: true }); }
              }
         }
-        if (action === 'listen') { /* ...Same as Patch 2.2... */ 
+
+        if (action === 'listen') {
              const songId = parts[1];
              db.prepare('UPDATE users SET listen_start = ?, listen_song_id = ? WHERE id = ?').run(Date.now(), songId, interaction.user.id);
              incrementViews(songId);
@@ -742,7 +747,8 @@ client.on('interactionCreate', async interaction => {
                  await interaction.reply({ content: "📩 **Check your DMs!** I sent the listening timer there.", ephemeral: true });
              } catch (e) { await interaction.reply({ content: `⏳ **Timer Started!**\nListen here: ${link}\n\nCome back and click **Review** after 45 seconds.`, components: [new ActionRowBuilder().addComponents(reviewBtn)], ephemeral: true }); }
         }
-        if (action === 'review') { /* ...Same as Patch 2.2... */ 
+
+        if (action === 'review') {
              const songId = parts[1];
              const check = db.prepare('SELECT 1 FROM reviews WHERE user_id = ? AND song_id = ?').get(interaction.user.id, songId);
              if (check) return interaction.reply({ content: "❌ **You have already reviewed this track.**", ephemeral: true });
@@ -756,7 +762,8 @@ client.on('interactionCreate', async interaction => {
              modal.addComponents(new ActionRowBuilder().addComponents(input));
              await interaction.showModal(modal);
         }
-        if (action === 'vote') { /* ...Same as Patch 2.2... */ 
+
+        if (action === 'vote') {
              const type = parts[1]; const songId = parts[2];
              let cost = type === 'neg1' ? 3 : parseInt(type); let pointsToAdd = type === 'neg1' ? -1 : parseInt(type);
              if (pointsToAdd > 0) { if (!canUserVote(interaction.user.id, songId, pointsToAdd)) { return interaction.reply({ content: `🛑 **Vote Limit Reached.** You can only give a total of 3 Upvotes per song.`, ephemeral: true }); } }
@@ -774,12 +781,14 @@ client.on('interactionCreate', async interaction => {
                  } catch(e) { await interaction.update({ content: `✅ **Success!** ${actionText}.\n💰 Remaining Balance: ${user.credits}`, components: [] }); }
              } else { await interaction.reply({ content: `❌ **Insufficient Credits!** Cost: ${cost}. Balance: ${getUser(interaction.user.id).credits}`, ephemeral: true }); }
         }
-        if (action === 'report') { /* ...Same as Patch 2.2... */ 
+
+        if (action === 'report') {
              await interaction.reply({ content: "✅ Report sent to moderators.", ephemeral: true });
              const guild = client.guilds.cache.get(process.env.GUILD_ID);
              const modChannel = guild.channels.cache.get(CHANNEL_MOD_QUEUE);
              if (modChannel) modChannel.send(`⚠️ **Report:** Song ID ${parts[1]} reported by <@${interaction.user.id}>.`);
         }
+        
         if (action === 'scribe') {
              const songId = parts[1];
              const modal = new ModalBuilder().setCustomId(`scribe_submit_${songId}`).setTitle('Scribe a Note');

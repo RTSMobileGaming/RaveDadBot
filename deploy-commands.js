@@ -77,6 +77,11 @@ const commands = [
         .setDescription('Admin Only: Increase Daily Submission Cap')
         .addUserOption(option => option.setName('user').setDescription('Target User').setRequired(true))
         .addIntegerOption(option => option.setName('extra_slots').setDescription('Additional slots').setRequired(true)),
+        // NEW: Leech List
+    new SlashCommandBuilder()
+        .setName('leech-list')
+        .setDescription('Mod Only: List users with worst ratios')
+        .addIntegerOption(option => option.setName('limit').setDescription('How many users (Max 25)').setRequired(true)),
 ];
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
