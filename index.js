@@ -324,40 +324,13 @@ client.on('interactionCreate', async interaction => {
             await interaction.reply({ content: `✅ **Limit Updated.** ${target.username} now has +${slots} extra daily submissions.`, ephemeral: true });
         }
 
-        // NEW: Leech List
         if (interaction.commandName === 'leech-list') {
             if (!isModerator(interaction.member)) return interaction.reply({ content: "Mods only.", ephemeral: true });
             const limit = Math.min(interaction.options.getInteger('limit'), 25);
-            
-            // CTE Query to calculate stats on the fly
-            const leeches = db.prepare(`
-                WITH Stats AS (
-                    SELECT 
-                        user_id, 
-                        COUNT(*) as songs,
-                        (SELECT COUNT(*) FROM reviews WHERE user_id = songs.user_id) as reviews
-                    FROM songs 
-                    GROUP BY user_id
-                )
-                SELECT *, (reviews * 1.0 / songs) as ratio 
-                FROM Stats 
-                ORDER BY ratio ASC, songs DESC 
-                LIMIT ?
-            `).all(limit);
-
+            const leeches = db.prepare(`WITH Stats AS (SELECT user_id, COUNT(*) as songs, (SELECT COUNT(*) FROM reviews WHERE user_id = songs.user_id) as reviews FROM songs GROUP BY user_id) SELECT *, (reviews * 1.0 / songs) as ratio FROM Stats ORDER BY ratio ASC, songs DESC LIMIT ?`).all(limit);
             if (leeches.length === 0) return interaction.reply({ content: "No data found.", ephemeral: true });
-
-            const lines = leeches.map((l, i) => {
-                const ratio = l.ratio ? l.ratio.toFixed(2) : "0.00";
-                return `${i+1}. <@${l.user_id}> • Ratio: **${ratio}** (🎵 ${l.songs} | 📝 ${l.reviews})`;
-            });
-
-            const embed = new EmbedBuilder()
-                .setColor(0xFF0000)
-                .setTitle(`🧛 Top ${limit} Leeches`)
-                .setDescription(lines.join('\n'))
-                .setFooter({ text: 'Sorted by Lowest Ratio -> Highest Song Count' });
-
+            const lines = leeches.map((l, i) => { const ratio = l.ratio ? l.ratio.toFixed(2) : "0.00"; return `${i+1}. <@${l.user_id}> • Ratio: **${ratio}** (🎵 ${l.songs} | 📝 ${l.reviews})`; });
+            const embed = new EmbedBuilder().setColor(0xFF0000).setTitle(`🧛 Top ${limit} Leeches`).setDescription(lines.join('\n')).setFooter({ text: 'Sorted by Lowest Ratio -> Highest Song Count' });
             await interaction.reply({ embeds: [embed], ephemeral: true });
         }
 
@@ -580,6 +553,7 @@ client.on('interactionCreate', async interaction => {
              await interaction.update({ content: "✅ On Stage! Posted to Session Log AND Public Channel.", components: [] });
         }
 
+        // Standard Menus
         if (interaction.customId === 'select_macro_1') {
              draft.macro1 = interaction.values[0];
              draftSubmissions.set(interaction.user.id, draft);
@@ -642,11 +616,20 @@ client.on('interactionCreate', async interaction => {
             await interaction.reply({ content: `Select Genre for the Stage:`, components: [row], ephemeral: true });
         }
 
+        // SCRIBE NOTE WITH DUPLICATE CHECK
         if (interaction.customId.startsWith('scribe_submit_')) {
             const songId = interaction.customId.split('_')[2];
             const note = interaction.fields.getTextInputValue('scribe_note');
+            
+            // Check for duplicates
+            const check = db.prepare('SELECT 1 FROM reviews WHERE user_id = ? AND song_id = ?').get(interaction.user.id, songId);
+            if (check) return interaction.reply({ content: "❌ **You have already scribed/reviewed this track.**", ephemeral: true });
+
+            // Insert into DB to prevent future double-dipping and grant points
+            db.prepare('INSERT OR IGNORE INTO reviews (user_id, song_id, timestamp) VALUES (?, ?, ?)').run(interaction.user.id, songId, Date.now());
             const reward = 2; 
             const result = addPoints(interaction.user.id, reward);
+            
             const song = getSongStats(songId);
             const targetChannelId = song.channel_id || CHANNEL_LEGACY;
             const channel = client.guilds.cache.get(process.env.GUILD_ID).channels.cache.get(targetChannelId);
