@@ -2,35 +2,34 @@ require('dotenv').config();
 const { REST, Routes, SlashCommandBuilder } = require('discord.js');
 
 const commands = [
-    new SlashCommandBuilder().setName('submit').setDescription('Submit a song to the community'),
+    new SlashCommandBuilder().setName('submit').setDescription('Submit a song (Cost: 3 Credits)'),
+    
+    // Updated Profile to clarify it accepts a user
     new SlashCommandBuilder()
         .setName('profile')
-        .setDescription('Check stats and financial status')
-        .addUserOption(option => option.setName('user').setDescription('Admin/Mod Only: Look up another user')),
+        .setDescription('Check stats. Mods can check other users.')
+        .addUserOption(option => option.setName('user').setDescription('Target User')),
+
     new SlashCommandBuilder().setName('share-profile').setDescription('Post your stats publicly'),
     new SlashCommandBuilder().setName('weekly-report').setDescription('Admin Only: Generate weekly report'),
     
-    // NEW: PORTFOLIO COMMANDS
+    // NEW: Suspend Command
     new SlashCommandBuilder()
-        .setName('admin-add-points')
-        .setDescription('Admin Only: Stimulus Package')
-        .addUserOption(option => option.setName('user').setDescription('Target User').setRequired(true))
-        .addIntegerOption(option => option.setName('amount').setDescription('Amount of Credits/Lifetime Pts').setRequired(true)),
+        .setName('suspend')
+        .setDescription('Mod Only: Ban a user from submitting songs')
+        .addUserOption(option => option.setName('user').setDescription('The User').setRequired(true))
+        .addIntegerOption(option => option.setName('hours').setDescription('Duration in Hours (24 = 1 day)').setRequired(true))
+        .addStringOption(option => option.setName('reason').setDescription('Reason for suspension').setRequired(true)),
 
-    new SlashCommandBuilder()
-        .setName('admin-set-bonus')
-        .setDescription('Admin Only: Increase Daily Submission Cap')
-        .addUserOption(option => option.setName('user').setDescription('Target User').setRequired(true))
-        .addIntegerOption(option => option.setName('extra_slots').setDescription('Additional slots (e.g. 1 means limit is 4)').setRequired(true)),
     new SlashCommandBuilder()
         .setName('songs')
         .setDescription('View a user\'s last 5 submissions (Private)')
-        .addUserOption(option => option.setName('user').setDescription('The user to look up (defaults to you)')),
+        .addUserOption(option => option.setName('user').setDescription('The user to look up')),
     
     new SlashCommandBuilder()
         .setName('share-songs')
         .setDescription('Share a user\'s last 5 submissions (Public)')
-        .addUserOption(option => option.setName('user').setDescription('The user to look up (defaults to you)')),
+        .addUserOption(option => option.setName('user').setDescription('The user to look up')),
 
     new SlashCommandBuilder()
         .setName('stage')
@@ -66,6 +65,18 @@ const commands = [
         .setName('admin-delete')
         .setDescription('Admin Only: Remove a song from DB and Discord')
         .addIntegerOption(option => option.setName('song_id').setDescription('The ID of the song to remove').setRequired(true)),
+
+    new SlashCommandBuilder()
+        .setName('admin-add-points')
+        .setDescription('Admin Only: Stimulus Package')
+        .addUserOption(option => option.setName('user').setDescription('Target User').setRequired(true))
+        .addIntegerOption(option => option.setName('amount').setDescription('Amount of Credits/Lifetime Pts').setRequired(true)),
+
+    new SlashCommandBuilder()
+        .setName('admin-set-bonus')
+        .setDescription('Admin Only: Increase Daily Submission Cap')
+        .addUserOption(option => option.setName('user').setDescription('Target User').setRequired(true))
+        .addIntegerOption(option => option.setName('extra_slots').setDescription('Additional slots').setRequired(true)),
 ];
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
