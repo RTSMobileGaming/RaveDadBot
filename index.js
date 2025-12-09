@@ -85,6 +85,13 @@ function isValidLink(url) {
     } catch (e) { return false; }
 }
 
+function createOption(text) {
+    // PATCH 2.6: Strict Sanitization to prevent Mobile App Crashes
+    // Discord limits labels/values to 100 characters.
+    const safeText = text ? text.substring(0, 100) : "Unknown";
+    return new StringSelectMenuOptionBuilder().setLabel(safeText).setValue(safeText);
+}
+
 function getUser(userId) {
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
     if (!user) {
@@ -560,7 +567,7 @@ client.on('interactionCreate', async interaction => {
              const rawOptions = taxonomy[draft.macro1] || [];
              const uniqueOptions = [...new Set(rawOptions)].filter(s => typeof s === 'string' && s.length > 0).slice(0, 25);
              if (uniqueOptions.length === 0) return interaction.update({ content: `❌ **Configuration Error.**`, components: [] });
-             const options = uniqueOptions.map(s => new StringSelectMenuOptionBuilder().setLabel(s).setValue(s));
+             const options = uniqueOptions.map(s => createOption(s));
              const menuRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('select_micro_1').setPlaceholder(`Select Style`).addOptions(options));
              const btnRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('back_to_macro_1').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary));
              await interaction.update({ content: `**Step 2/4:** Select specific style for ${draft.macro1}`, components: [menuRow, btnRow] });
@@ -568,7 +575,7 @@ client.on('interactionCreate', async interaction => {
         else if (interaction.customId === 'select_micro_1') {
              draft.micro1 = interaction.values[0];
              draftSubmissions.set(interaction.user.id, draft);
-             const macroOptions = Object.keys(taxonomy).map(m => new StringSelectMenuOptionBuilder().setLabel(m).setValue(m)).slice(0, 24); 
+             const macroOptions = Object.keys(taxonomy).map(m => createOption(m)).slice(0, 24); 
              macroOptions.unshift(new StringSelectMenuOptionBuilder().setLabel("🚫 No Secondary Genre (Skip)").setValue("SKIP"));
              const menuRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('select_macro_2').setPlaceholder('Select Secondary Category').addOptions(macroOptions));
              const btnRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('back_to_micro_1').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary));
@@ -580,7 +587,7 @@ client.on('interactionCreate', async interaction => {
              draftSubmissions.set(interaction.user.id, draft);
              const rawOptions = taxonomy[draft.macro2] || [];
              const uniqueOptions = [...new Set(rawOptions)].filter(s => typeof s === 'string' && s.length > 0).slice(0, 25);
-             const options = uniqueOptions.map(s => new StringSelectMenuOptionBuilder().setLabel(s).setValue(s));
+             const options = uniqueOptions.map(s => createOption(s));
              const menuRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('select_micro_2').setPlaceholder(`Select Style`).addOptions(options));
              const btnRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('back_to_macro_2').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary));
              await interaction.update({ content: `**Step 4/4:** Select specific style for ${draft.macro2}`, components: [menuRow, btnRow] });
@@ -599,7 +606,7 @@ client.on('interactionCreate', async interaction => {
             const desc = interaction.fields.getTextInputValue('song_desc');
             const artist = interaction.fields.getTextInputValue('artist_name'); 
             draftSubmissions.set(interaction.user.id, { link, description: desc, artist_name: artist, title: title });
-            const macroOptions = Object.keys(taxonomy).map(m => new StringSelectMenuOptionBuilder().setLabel(m).setValue(m));
+            const macroOptions = Object.keys(taxonomy).map(m => createOption(m));
             const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('select_macro_1').setPlaceholder('Select Primary Category').addOptions(macroOptions));
             await interaction.reply({ content: `**Step 2/4:** Select Genre`, components: [row], ephemeral: true });
         }
@@ -611,7 +618,7 @@ client.on('interactionCreate', async interaction => {
             draft.title = title;
             draft.artist_name = artist;
             draftSubmissions.set(interaction.user.id, draft);
-            const macroOptions = Object.keys(taxonomy).map(m => new StringSelectMenuOptionBuilder().setLabel(m).setValue(m));
+            const macroOptions = Object.keys(taxonomy).map(m => createOption(m));
             const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('stage_select_genre').setPlaceholder('Select Genre').addOptions(macroOptions));
             await interaction.reply({ content: `Select Genre for the Stage:`, components: [row], ephemeral: true });
         }
@@ -620,16 +627,11 @@ client.on('interactionCreate', async interaction => {
         if (interaction.customId.startsWith('scribe_submit_')) {
             const songId = interaction.customId.split('_')[2];
             const note = interaction.fields.getTextInputValue('scribe_note');
-            
-            // Check for duplicates
             const check = db.prepare('SELECT 1 FROM reviews WHERE user_id = ? AND song_id = ?').get(interaction.user.id, songId);
             if (check) return interaction.reply({ content: "❌ **You have already scribed/reviewed this track.**", ephemeral: true });
-
-            // Insert into DB to prevent future double-dipping and grant points
             db.prepare('INSERT OR IGNORE INTO reviews (user_id, song_id, timestamp) VALUES (?, ?, ?)').run(interaction.user.id, songId, Date.now());
             const reward = 2; 
             const result = addPoints(interaction.user.id, reward);
-            
             const song = getSongStats(songId);
             const targetChannelId = song.channel_id || CHANNEL_LEGACY;
             const channel = client.guilds.cache.get(process.env.GUILD_ID).channels.cache.get(targetChannelId);
@@ -686,19 +688,19 @@ client.on('interactionCreate', async interaction => {
              if (!draft) return interaction.reply({ content: "Session expired.", ephemeral: true });
              const step = parts.slice(2).join('_');
              if (step === 'macro_1') {
-                 const macroOptions = Object.keys(taxonomy).map(m => new StringSelectMenuOptionBuilder().setLabel(m).setValue(m));
+                 const macroOptions = Object.keys(taxonomy).map(m => createOption(m));
                  const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('select_macro_1').setPlaceholder('Select Primary Category').addOptions(macroOptions));
                  await interaction.update({ content: `**Step 1/4:** Select Primary Genre`, components: [row] });
              }
              else if (step === 'micro_1') {
                  const subGenres = taxonomy[draft.macro1] || [];
-                 const options = [...new Set(subGenres)].slice(0, 25).map(s => new StringSelectMenuOptionBuilder().setLabel(s).setValue(s));
+                 const options = [...new Set(subGenres)].slice(0, 25).map(s => createOption(s));
                  const menuRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('select_micro_1').setPlaceholder(`Select Style`).addOptions(options));
                  const btnRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('back_to_macro_1').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary));
                  await interaction.update({ content: `**Step 2/4:** Select specific style for ${draft.macro1}`, components: [menuRow, btnRow] });
              }
              else if (step === 'macro_2') {
-                 const macroOptions = Object.keys(taxonomy).map(m => new StringSelectMenuOptionBuilder().setLabel(m).setValue(m));
+                 const macroOptions = Object.keys(taxonomy).map(m => createOption(m));
                  macroOptions.unshift(new StringSelectMenuOptionBuilder().setLabel("🚫 No Secondary Genre (Skip)").setValue("SKIP"));
                  const menuRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('select_macro_2').setPlaceholder('Select Secondary Category').addOptions(macroOptions));
                  const btnRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('back_to_micro_1').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary));
