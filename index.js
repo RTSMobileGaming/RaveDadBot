@@ -246,8 +246,9 @@ async function updatePublicEmbed(guild, songId) {
 }
 
 async function finalizeSubmission(interaction, draft) {
+    // PATCH 2.7: Using editReply because we deferred in the caller
     if (!spendCredits(interaction.user.id, SUBMISSION_COST)) {
-         return interaction.update({ content: `❌ **Transaction Failed.** You need ${SUBMISSION_COST} Credits. Review tracks to earn more.`, components: [] });
+         return interaction.editReply({ content: `❌ **Transaction Failed.** You need ${SUBMISSION_COST} Credits. Review tracks to earn more.`, components: [] });
     }
 
     const finalTags = [draft.macro1, draft.micro1, draft.macro2, draft.micro2].filter(t => t && t !== 'SKIP');
@@ -274,7 +275,7 @@ async function finalizeSubmission(interaction, draft) {
     }
     
     const user = getUser(interaction.user.id);
-    await interaction.update({ content: `✅ **Submission Complete!**\n💸 **Paid:** ${SUBMISSION_COST} Credits\n💰 **Remaining:** ${user.credits}\nPosted to <#${targetChannelId}>.`, components: [] });
+    await interaction.editReply({ content: `✅ **Submission Complete!**\n💸 **Paid:** ${SUBMISSION_COST} Credits\n💰 **Remaining:** ${user.credits}\nPosted to <#${targetChannelId}>.`, components: [] });
     draftSubmissions.delete(interaction.user.id);
 }
 
@@ -537,6 +538,7 @@ client.on('interactionCreate', async interaction => {
         const draft = draftSubmissions.get(interaction.user.id);
         if (!draft) return interaction.reply({ content: "❌ **Session Expired.** The bot may have restarted. Please run `/submit` again.", ephemeral: true });
 
+        // PATCH 2.7: Using deferUpdate + editReply for all menus to fix mobile crash
         if (interaction.customId === 'stage_select_genre') {
              const genre = interaction.values[0];
              const targetChannelId = CHANNEL_ROUTER[genre] || CHANNEL_LEGACY;
@@ -557,7 +559,9 @@ client.on('interactionCreate', async interaction => {
              const embed = new EmbedBuilder().setColor(0xFF00FF).setTitle('🔴 NOW PLAYING').setDescription(`**${draft.title}** by ${draft.artist_name}`).addFields({ name: 'Listen', value: draft.link }).setFooter({ text: `ID: ${songId}` });
              const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`vote_1_${songId}`).setLabel('🔥 Banger (+1)').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId(`scribe_${songId}`).setLabel('📝 Scribe Note').setStyle(ButtonStyle.Secondary));
              await logChannel.send({ embeds: [embed], components: [row] });
-             await interaction.update({ content: "✅ On Stage! Posted to Session Log AND Public Channel.", components: [] });
+             
+             await interaction.deferUpdate();
+             await interaction.editReply({ content: "✅ On Stage! Posted to Session Log AND Public Channel.", components: [] });
         }
 
         // Standard Menus
@@ -566,11 +570,14 @@ client.on('interactionCreate', async interaction => {
              draftSubmissions.set(interaction.user.id, draft);
              const rawOptions = taxonomy[draft.macro1] || [];
              const uniqueOptions = [...new Set(rawOptions)].filter(s => typeof s === 'string' && s.length > 0).slice(0, 25);
-             if (uniqueOptions.length === 0) return interaction.update({ content: `❌ **Configuration Error.**`, components: [] });
+             
+             await interaction.deferUpdate(); // Prevents "label of undefined" crash
+             if (uniqueOptions.length === 0) return interaction.editReply({ content: `❌ **Configuration Error.**`, components: [] });
+             
              const options = uniqueOptions.map(s => createOption(s));
              const menuRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('select_micro_1').setPlaceholder(`Select Style`).addOptions(options));
              const btnRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('back_to_macro_1').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary));
-             await interaction.update({ content: `**Step 2/4:** Select specific style for ${draft.macro1}`, components: [menuRow, btnRow] });
+             await interaction.editReply({ content: `**Step 2/4:** Select specific style for ${draft.macro1}`, components: [menuRow, btnRow] });
         }
         else if (interaction.customId === 'select_micro_1') {
              draft.micro1 = interaction.values[0];
@@ -579,10 +586,16 @@ client.on('interactionCreate', async interaction => {
              macroOptions.unshift(new StringSelectMenuOptionBuilder().setLabel("🚫 No Secondary Genre (Skip)").setValue("SKIP"));
              const menuRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('select_macro_2').setPlaceholder('Select Secondary Category').addOptions(macroOptions));
              const btnRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('back_to_micro_1').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary));
-             await interaction.update({ content: `**Step 3/4:** Select a Secondary Genre (or Skip)`, components: [menuRow, btnRow] });
+             
+             await interaction.deferUpdate();
+             await interaction.editReply({ content: `**Step 3/4:** Select a Secondary Genre (or Skip)`, components: [menuRow, btnRow] });
         }
         else if (interaction.customId === 'select_macro_2') {
-             if (interaction.values[0] === 'SKIP') { draft.macro2 = 'SKIP'; return finalizeSubmission(interaction, draft); }
+             await interaction.deferUpdate();
+             if (interaction.values[0] === 'SKIP') { 
+                 draft.macro2 = 'SKIP'; 
+                 return finalizeSubmission(interaction, draft); 
+             }
              draft.macro2 = interaction.values[0];
              draftSubmissions.set(interaction.user.id, draft);
              const rawOptions = taxonomy[draft.macro2] || [];
@@ -590,10 +603,12 @@ client.on('interactionCreate', async interaction => {
              const options = uniqueOptions.map(s => createOption(s));
              const menuRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('select_micro_2').setPlaceholder(`Select Style`).addOptions(options));
              const btnRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('back_to_macro_2').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary));
-             await interaction.update({ content: `**Step 4/4:** Select specific style for ${draft.macro2}`, components: [menuRow, btnRow] });
+             
+             await interaction.editReply({ content: `**Step 4/4:** Select specific style for ${draft.macro2}`, components: [menuRow, btnRow] });
         }
         else if (interaction.customId === 'select_micro_2') {
              draft.micro2 = interaction.values[0];
+             await interaction.deferUpdate();
              return finalizeSubmission(interaction, draft);
         }
     }
@@ -687,24 +702,28 @@ client.on('interactionCreate', async interaction => {
              const draft = draftSubmissions.get(interaction.user.id);
              if (!draft) return interaction.reply({ content: "Session expired.", ephemeral: true });
              const step = parts.slice(2).join('_');
+             
+             // PATCH 2.7: Using deferUpdate + editReply for Back buttons too
+             await interaction.deferUpdate();
+
              if (step === 'macro_1') {
                  const macroOptions = Object.keys(taxonomy).map(m => createOption(m));
                  const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('select_macro_1').setPlaceholder('Select Primary Category').addOptions(macroOptions));
-                 await interaction.update({ content: `**Step 1/4:** Select Primary Genre`, components: [row] });
+                 await interaction.editReply({ content: `**Step 1/4:** Select Primary Genre`, components: [row] });
              }
              else if (step === 'micro_1') {
                  const subGenres = taxonomy[draft.macro1] || [];
                  const options = [...new Set(subGenres)].slice(0, 25).map(s => createOption(s));
                  const menuRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('select_micro_1').setPlaceholder(`Select Style`).addOptions(options));
                  const btnRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('back_to_macro_1').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary));
-                 await interaction.update({ content: `**Step 2/4:** Select specific style for ${draft.macro1}`, components: [menuRow, btnRow] });
+                 await interaction.editReply({ content: `**Step 2/4:** Select specific style for ${draft.macro1}`, components: [menuRow, btnRow] });
              }
              else if (step === 'macro_2') {
                  const macroOptions = Object.keys(taxonomy).map(m => createOption(m));
                  macroOptions.unshift(new StringSelectMenuOptionBuilder().setLabel("🚫 No Secondary Genre (Skip)").setValue("SKIP"));
                  const menuRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('select_macro_2').setPlaceholder('Select Secondary Category').addOptions(macroOptions));
                  const btnRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('back_to_micro_1').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary));
-                 await interaction.update({ content: `**Step 3/4:** Select a Secondary Genre (or Skip)`, components: [menuRow, btnRow] });
+                 await interaction.editReply({ content: `**Step 3/4:** Select a Secondary Genre (or Skip)`, components: [menuRow, btnRow] });
              }
         }
 
