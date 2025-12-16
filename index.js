@@ -137,14 +137,15 @@ function sanitizeLabel(text) {
  * - Store the real labels in the draft so we can resolve them safely.
  */
 function buildMenuRow(draft, menuId, placeholder, labels, { includeBack = false, backTo = null, includeSkip = false } = {}) {
+  // Defensive: Mobile Discord can crash if a select menu is sent with 0 options.
   const cleaned = (labels || [])
-    .filter((x) => typeof x === 'string')
-    .map((x) => x.trim())
+    .filter((x) => x !== null && x !== undefined)
+    .map((x) => String(x).trim())
     .filter((x) => x.length > 0);
 
   const unique = [...new Set(cleaned)].slice(0, 25);
 
-  // Store mapping on the draft
+  // Store mapping on the draft (used to resolve `${menuId}|${idx}` -> label)
   if (!draft.optionLists) draft.optionLists = {};
   draft.optionLists[menuId] = unique;
 
@@ -154,12 +155,16 @@ function buildMenuRow(draft, menuId, placeholder, labels, { includeBack = false,
   }
 
   unique.forEach((label, idx) => {
+    const safeLabel = sanitizeLabel(label);
     options.push(
       new StringSelectMenuOptionBuilder()
-        .setLabel(sanitizeLabel(label))
+        .setLabel(safeLabel)
         .setValue(`${menuId}|${idx}`)
     );
   });
+
+  // If we somehow ended up with no options, do NOT send a select menu.
+  if (options.length === 0) return null;
 
   const menu = new StringSelectMenuBuilder().setCustomId(menuId).setPlaceholder(placeholder).addOptions(options);
 
@@ -175,6 +180,7 @@ function buildMenuRow(draft, menuId, placeholder, labels, { includeBack = false,
 
   return rows;
 }
+
 
 function resolveMenuSelection(draft, menuId, selectedValue) {
   if (selectedValue === 'SKIP') return 'SKIP';
@@ -1048,6 +1054,7 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       const rows = buildMenuRow(draft, 'select_micro_1', 'Select Style', subGenres, { includeBack: true, backTo: 'macro_1' });
+      if (!rows) return interaction.editReply({ content: '❌ Configuration Error: No options to display.', components: [] });
       draftSubmissions.set(interaction.user.id, draft);
 
       return interaction.editReply({
@@ -1099,6 +1106,7 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       const rows = buildMenuRow(draft, 'select_micro_2', 'Select Style', subGenres, { includeBack: true, backTo: 'macro_2' });
+      if (!rows) return interaction.editReply({ content: '❌ Configuration Error: No options to display.', components: [] });
       draftSubmissions.set(interaction.user.id, draft);
 
       return interaction.editReply({
@@ -1131,6 +1139,8 @@ client.on('interactionCreate', async (interaction) => {
 
       const macros = Object.keys(taxonomy);
       const rows = buildMenuRow(draft, 'select_macro_1', 'Select Primary Category', macros);
+      if (!rows) return interaction.editReply({ content: '❌ Configuration Error: No genre options configured.', components: [] });
+      if (!rows) return interaction.reply({ content: '❌ Configuration Error: No genre options configured.', ephemeral: true });
 
       draftSubmissions.set(interaction.user.id, draft);
 
@@ -1152,6 +1162,7 @@ client.on('interactionCreate', async (interaction) => {
 
       const macros = Object.keys(taxonomy);
       const rows = buildMenuRow(draft, 'stage_select_genre', 'Select Genre', macros);
+      if (!rows) return interaction.reply({ content: '❌ Configuration Error: No genre options configured.', ephemeral: true });
 
       draftSubmissions.set(interaction.user.id, draft);
 
@@ -1260,6 +1271,7 @@ client.on('interactionCreate', async (interaction) => {
       if (backTarget === 'micro_1') {
         const subGenres = taxonomy[draft.macro1] || [];
         const rows = buildMenuRow(draft, 'select_micro_1', 'Select Style', subGenres, { includeBack: true, backTo: 'macro_1' });
+      if (!rows) return interaction.editReply({ content: '❌ Configuration Error: No options to display.', components: [] });
         draftSubmissions.set(interaction.user.id, draft);
         return interaction.editReply({ content: `Step 2/4: Select specific style for ${draft.macro1}`, components: rows });
       }
@@ -1267,6 +1279,7 @@ client.on('interactionCreate', async (interaction) => {
       if (backTarget === 'macro_2') {
         const macros = Object.keys(taxonomy);
         const rows = buildMenuRow(draft, 'select_macro_2', 'Select Secondary Category', macros, { includeSkip: true, includeBack: true, backTo: 'micro_1' });
+      if (!rows) return interaction.editReply({ content: '❌ Configuration Error: No genre options configured.', components: [] });
         draftSubmissions.set(interaction.user.id, draft);
         return interaction.editReply({ content: `Step 3/4: Select a Secondary Genre (or Skip)`, components: rows });
       }
