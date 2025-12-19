@@ -626,6 +626,29 @@ async function finalizeSubmission(interaction, draft) {
   draftSubmissions.delete(interaction.user.id);
 }
 
+
+// --- INTERACTION ACK HELPERS ---
+// Prevents "Unknown interaction" (code 10062) by acknowledging quickly and using editReply thereafter.
+async function safeDeferReply(interaction, opts = { ephemeral: true }) {
+  try {
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferReply(opts);
+    }
+  } catch (e) {
+    // Ignore; we'll attempt a best-effort reply later
+  }
+}
+
+async function safeReplyOrEdit(interaction, payload) {
+  try {
+    if (interaction.deferred || interaction.replied) return await interaction.editReply(payload);
+    return await interaction.reply(payload);
+  } catch (e) {
+    // If the interaction is already gone, avoid crashing the bot
+    if (e?.code !== 10062) console.error('Interaction response failed:', e);
+  }
+}
+
 client.once('ready', () => {
   console.log(`Logged in as ${client.user.tag}!`);
   setInterval(() => {
@@ -1171,10 +1194,11 @@ client.on('interactionCreate', async (interaction) => {
 
     // SCRIBE NOTE WITH DUPLICATE CHECK
     if (interaction.customId.startsWith('scribe_submit_')) {
+      await safeDeferReply(interaction, { ephemeral: true });
       const songId = interaction.customId.split('_')[2];
       const note = interaction.fields.getTextInputValue('scribe_note');
       const check = db.prepare('SELECT 1 FROM reviews WHERE user_id = ? AND song_id = ?').get(interaction.user.id, songId);
-      if (check) return interaction.reply({ content: '❌ You have already scribed/reviewed this track.', ephemeral: true });
+      if (check) return safeReplyOrEdit(interaction, { content: '❌ You have already scribed/reviewed this track.', ephemeral: true });
 
       db.prepare('INSERT OR IGNORE INTO reviews (user_id, song_id, timestamp) VALUES (?, ?, ?)').run(interaction.user.id, songId, Date.now());
       const reward = 2;
@@ -1193,19 +1217,20 @@ client.on('interactionCreate', async (interaction) => {
           }
           await thread.send(`🎙️ Live Session Note by <@${interaction.user.id}> for <@${song.user_id}>:\n"${note}"`);
           const msg = result.earned ? `✅ Note Scribed! (+${reward} Credits)` : `✅ Note Scribed! (Daily Cap Reached)`;
-          return interaction.reply({ content: msg, ephemeral: true });
+          return safeReplyOrEdit(interaction, { content: msg, ephemeral: true });
         }
       }
-      return interaction.reply({ content: '✅ Note saved.', ephemeral: true });
+      return safeReplyOrEdit(interaction, { content: '✅ Note saved.', ephemeral: true });
     }
 
     if (interaction.customId.startsWith('review_submit_')) {
+      await safeDeferReply(interaction, { ephemeral: true });
       const songId = interaction.customId.split('_')[2];
       const reviewText = interaction.fields.getTextInputValue('review_text');
 
       const check = db.prepare('SELECT 1 FROM reviews WHERE user_id = ? AND song_id = ?').get(interaction.user.id, songId);
-      if (check) return interaction.reply({ content: '❌ You have already reviewed this track.', ephemeral: true });
-      if (reviewText.split(/\s+/).length < 5) return interaction.reply({ content: '❌ Review too short!', ephemeral: true });
+      if (check) return safeReplyOrEdit(interaction, { content: '❌ You have already reviewed this track.', ephemeral: true });
+      if (reviewText.split(/\s+/).length < 5) return safeReplyOrEdit(interaction, { content: '❌ Review too short!', ephemeral: true });
 
       db.prepare('INSERT OR IGNORE INTO reviews (user_id, song_id, timestamp) VALUES (?, ?, ?)').run(interaction.user.id, songId, Date.now());
       const result = addPoints(interaction.user.id);
@@ -1225,9 +1250,9 @@ client.on('interactionCreate', async (interaction) => {
 
       try {
         await interaction.user.send({ content: `Review Submitted!\n${msg}`, components: [row] });
-        await interaction.reply({ content: '✅ Check your DMs! I sent the voting menu there so you can keep scrolling.', ephemeral: true });
+        await safeReplyOrEdit(interaction, { content: '✅ Check your DMs! I sent the voting menu there so you can keep scrolling.', ephemeral: true });
       } catch (e) {
-        await interaction.reply({ content: msg, components: [row], ephemeral: true });
+        await safeReplyOrEdit(interaction, { content: msg, components: [row], ephemeral: true });
       }
 
       const song = getSongStats(songId);
@@ -1253,7 +1278,7 @@ client.on('interactionCreate', async (interaction) => {
 
     if (action === 'back') {
       const draft = draftSubmissions.get(interaction.user.id);
-      if (!draft) return interaction.reply({ content: 'Session expired.', ephemeral: true });
+      if (!draft) return safeReplyOrEdit(interaction, { content: 'Session expired.', ephemeral: true });
 
       // Always ack quickly
       await interaction.deferUpdate();
@@ -1287,22 +1312,23 @@ client.on('interactionCreate', async (interaction) => {
 
     if (action === 'accept' && parts[1] === 'tos') {
       const roleName = 'Verified Member';
-      if (!interaction.guild) return interaction.reply({ content: 'Please accept TOS in the server channel.', ephemeral: true });
+      if (!interaction.guild) return safeReplyOrEdit(interaction, { content: 'Please accept TOS in the server channel.', ephemeral: true });
 
       const role = interaction.guild.roles.cache.find((r) => r.name === roleName);
-      if (!role) return interaction.reply({ content: `❌ Configuration Error: Role "${roleName}" not found.`, ephemeral: true });
-      if (interaction.member.roles.cache.has(role.id)) return interaction.reply({ content: 'You are already verified! Go make some music.', ephemeral: true });
+      if (!role) return safeReplyOrEdit(interaction, { content: `❌ Configuration Error: Role "${roleName}" not found.`, ephemeral: true });
+      if (interaction.member.roles.cache.has(role.id)) return safeReplyOrEdit(interaction, { content: 'You are already verified! Go make some music.', ephemeral: true });
 
       try {
         await interaction.member.roles.add(role);
-        return interaction.reply({ content: '✅ Access Granted. Welcome to the community!', ephemeral: true });
+        return safeReplyOrEdit(interaction, { content: '✅ Access Granted. Welcome to the community!', ephemeral: true });
       } catch (err) {
         console.error(err);
-        return interaction.reply({ content: "❌ Error: Bot Role must be higher than 'Verified Member'.", ephemeral: true });
+        return safeReplyOrEdit(interaction, { content: "❌ Error: Bot Role must be higher than 'Verified Member'.", ephemeral: true });
       }
     }
 
     if (action === 'listen') {
+      await safeDeferReply(interaction, { ephemeral: true });
       const songId = parts[1];
       db.prepare('UPDATE users SET listen_start = ?, listen_song_id = ? WHERE id = ?').run(Date.now(), songId, interaction.user.id);
       incrementViews(songId);
@@ -1318,9 +1344,9 @@ client.on('interactionCreate', async (interaction) => {
           content: `⏳ Timer Started!\nListen here: ${link}\n\nCome back and click Review below after 45 seconds.`,
           components: [new ActionRowBuilder().addComponents(reviewBtn)]
         });
-        return interaction.reply({ content: '📩 Check your DMs! I sent the listening timer there.', ephemeral: true });
+        return safeReplyOrEdit(interaction, { content: '📩 Check your DMs! I sent the listening timer there.', ephemeral: true });
       } catch (e) {
-        return interaction.reply({
+        return safeReplyOrEdit(interaction, {
           content: `⏳ Timer Started!\nListen here: ${link}\n\nCome back and click Review after 45 seconds.`,
           components: [new ActionRowBuilder().addComponents(reviewBtn)],
           ephemeral: true
@@ -1331,16 +1357,16 @@ client.on('interactionCreate', async (interaction) => {
     if (action === 'review') {
       const songId = parts[1];
       const check = db.prepare('SELECT 1 FROM reviews WHERE user_id = ? AND song_id = ?').get(interaction.user.id, songId);
-      if (check) return interaction.reply({ content: '❌ You have already reviewed this track.', ephemeral: true });
+      if (check) return safeReplyOrEdit(interaction, { content: '❌ You have already reviewed this track.', ephemeral: true });
 
       const user = getUser(interaction.user.id);
       const startTime = user.listen_start;
-      if (!startTime || user.listen_song_id != songId) return interaction.reply({ content: "Click 'Start Listening' first.", ephemeral: true });
+      if (!startTime || user.listen_song_id != songId) return safeReplyOrEdit(interaction, { content: "Click 'Start Listening' first.", ephemeral: true });
 
       const elapsed = Date.now() - startTime;
       if (elapsed < 45000) {
         const remaining = Math.ceil((45000 - elapsed) / 1000);
-        return interaction.reply({ content: `🛑 Too fast! Listen for ${remaining} more seconds.`, ephemeral: true });
+        return safeReplyOrEdit(interaction, { content: `🛑 Too fast! Listen for ${remaining} more seconds.`, ephemeral: true });
       }
 
       const modal = new ModalBuilder().setCustomId(`review_submit_${songId}`).setTitle('Write a Review');
@@ -1350,6 +1376,7 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (action === 'vote') {
+      await safeDeferReply(interaction, { ephemeral: true });
       const type = parts[1];
       const songId = parts[2];
 
@@ -1358,12 +1385,12 @@ client.on('interactionCreate', async (interaction) => {
 
       if (pointsToAdd > 0) {
         if (!canUserVote(interaction.user.id, songId, pointsToAdd)) {
-          return interaction.reply({ content: `🛑 Vote Limit Reached. You can only give a total of 3 Upvotes per song.`, ephemeral: true });
+          return safeReplyOrEdit(interaction, { content: `🛑 Vote Limit Reached. You can only give a total of 3 Upvotes per song.`, ephemeral: true });
         }
       }
 
       const success = spendCredits(interaction.user.id, cost);
-      if (!success) return interaction.reply({ content: `❌ Insufficient Credits! Cost: ${cost}. Balance: ${getUser(interaction.user.id).credits}`, ephemeral: true });
+      if (!success) return safeReplyOrEdit(interaction, { content: `❌ Insufficient Credits! Cost: ${cost}. Balance: ${getUser(interaction.user.id).credits}`, ephemeral: true });
 
       if (pointsToAdd > 0) recordVote(interaction.user.id, songId, pointsToAdd);
       modifyUpvotes(songId, pointsToAdd);
@@ -1377,15 +1404,16 @@ client.on('interactionCreate', async (interaction) => {
       try {
         await interaction.user.send(`✅ Success! ${actionText}.\n💰 Remaining Balance: ${u.credits}`);
         if (interaction.message && interaction.message.channel.type === ChannelType.DM) {
-          return interaction.update({ content: 'Vote Recorded.', components: [] });
+          return safeReplyOrEdit(interaction, { content: 'Vote Recorded.', components: [] });
         }
       } catch (e) {}
 
-      return interaction.update({ content: `✅ Success! ${actionText}.\n💰 Remaining Balance: ${u.credits}`, components: [] });
+      return safeReplyOrEdit(interaction, { content: `✅ Success! ${actionText}.\n💰 Remaining Balance: ${u.credits}`, components: [] });
     }
 
     if (action === 'report') {
-      await interaction.reply({ content: '✅ Report sent to moderators.', ephemeral: true });
+      await safeDeferReply(interaction, { ephemeral: true });
+      await safeReplyOrEdit(interaction, { content: '✅ Report sent to moderators.', ephemeral: true });
       const guild = client.guilds.cache.get(process.env.GUILD_ID);
       const modChannel = guild.channels.cache.get(CHANNEL_MOD_QUEUE);
       if (modChannel) modChannel.send(`⚠️ Report: Song ID ${parts[1]} reported by <@${interaction.user.id}>.`);
